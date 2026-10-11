@@ -5,15 +5,17 @@
   "branch": "sf/20261011-202303",
   "approve_plan": false,
   "status": "running",
-  "stage": "branch",
+  "stage": "prompt",
   "loop": 0,
   "max_loops": 5,
   "cap_reached": false,
   "completed": [
-    "branch"
+    "branch",
+    "prompt"
   ],
   "results": {
-    "branch": "on sf/20261011-202303; installed AGENTS.md, docs/VALIDATION.md, docs/coding-standards.md, docs/architecture.md"
+    "branch": "on sf/20261011-202303; installed AGENTS.md, docs/VALIDATION.md, docs/coding-standards.md, docs/architecture.md",
+    "prompt": "prompt saved"
   },
   "invocations": [],
   "tokens": {
