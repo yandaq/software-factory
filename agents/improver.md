@@ -1,8 +1,8 @@
 ---
 name: improver
 purpose: Propose improvements to agent definitions and target standards from run evidence
-model: openai-codex/gpt-5.6-sol
-thinking: medium
+model: anthropic/claude-fable-5
+thinking: high
 tools: [read, grep, find, ls]
 contract:
   type: object

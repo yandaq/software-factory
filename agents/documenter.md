@@ -1,8 +1,8 @@
 ---
 name: documenter
 purpose: Bring documentation in line with the branch diff
-model: openai-codex/gpt-5.6-sol
-thinking: medium
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, bash, edit, write, grep, find, ls]
 contract:
   type: object

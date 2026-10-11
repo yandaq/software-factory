@@ -1,8 +1,8 @@
 ---
 name: planner
 purpose: Turn a request into an implementation plan for the target repository
-model: openai-codex/gpt-5.6-sol
-thinking: medium
+model: anthropic/claude-opus-5-5
+thinking: high
 tools: [read, grep, find, ls]
 contract:
   type: object

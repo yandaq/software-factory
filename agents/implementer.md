@@ -1,8 +1,8 @@
 ---
 name: implementer
 purpose: Deliver the planned work
-model: openai-codex/gpt-5.6-sol
-thinking: medium
+model: anthropic/claude-opus-5-5
+thinking: low
 tools: [read, bash, edit, write, grep, find, ls]
 contract:
   type: object
