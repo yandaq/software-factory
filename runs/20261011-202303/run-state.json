@@ -11,11 +11,13 @@
   "cap_reached": false,
   "completed": [
     "branch",
-    "prompt"
+    "prompt",
+    "plan"
   ],
   "results": {
     "branch": "on sf/20261011-202303; installed AGENTS.md, docs/VALIDATION.md, docs/coding-standards.md, docs/architecture.md",
-    "prompt": "prompt saved"
+    "prompt": "prompt saved",
+    "plan": "plan written"
   },
   "invocations": [
     {
