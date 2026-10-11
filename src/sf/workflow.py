@@ -173,6 +173,10 @@ class Workflow:
         self._checkpoint("plan written")
         if self.state.approve_plan and not self.human.approve_plan(plan):
             raise Aborted("plan rejected by human")
+        plan_path = f"docs/plans/{self.state.run_id}.md"
+        (self.run.target / plan_path).parent.mkdir(parents=True, exist_ok=True)
+        (self.run.target / plan_path).write_text(plan.rstrip() + "\n")
+        self.commit(self.run.target, f"sf {self.state.run_id}: plan", (plan_path,))
         return "plan approved" if self.state.approve_plan else "plan written"
 
     def stage_implement(self) -> str:

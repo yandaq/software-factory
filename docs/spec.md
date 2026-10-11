@@ -68,7 +68,7 @@ pi --mode json --model <model> --thinking <thinking> --tools <tools> \
 
 1. **Branch.** Create a new branch `sf/<run-id>` in the target, off the trunk.
 2. **Prompt.** Save the prompt to `runs/<id>/prompt.md`.
-3. **Plan.** The planner produces `plan.md`. With `--approve-plan`, a human approves the plan before the run continues.
+3. **Plan.** The planner produces `plan.md`. With `--approve-plan`, a human approves the plan before the run continues. The approved plan is then committed to the target branch as `docs/plans/<run-id>.md` before implementation starts.
 4. **Implement ⇄ Review**, for up to **5 loops**:
    - **Implementer.** Starts a fresh session each loop, with the plan, the latest review findings and the latest validation output. It follows **no** coding standards and simply delivers the planned work. Commit.
    - **Validation.** The orchestrator runs the commands listed in `docs/VALIDATION.md`. If there are none, validation is skipped and the skip is logged. On failure, control returns to the implementer without running the reviewer, and this counts as a loop.

@@ -73,6 +73,10 @@ def test_happy_path(factory, target, fake_pi):
         "improve",
     ]
     assert (run.dir / "plan.md").read_text().startswith("# Plan")
+    # plan committed on the branch before implementation
+    log = sh(target, "git", "log", "--reverse", "--format=%s").splitlines()
+    assert log.index(f"sf {st.run_id}: plan") < log.index(f"sf {st.run_id}: implement (loop 1)")
+    assert (target / f"docs/plans/{st.run_id}.md").read_text().startswith("# Plan")
     assert "**Verdict:** approve" in (run.dir / "review-1.md").read_text()
     # target: standards installed, merged with --no-ff, docs written
     assert sh(target, "git", "branch", "--show-current").strip() == "main"
@@ -144,6 +148,7 @@ def test_plan_rejected_aborts(factory, target, fake_pi):
     with pytest.raises(Aborted):
         wf.execute()
     assert [c["agent"] for c in calls(s)] == ["planner"]
+    assert not (target / "docs/plans").exists()
 
 
 def test_documenter_scope_enforced(factory, target, fake_pi):
