@@ -3,7 +3,7 @@
 | Module | Responsibility |
 |---|---|
 | `cli.py` | Typer commands; lockfile; maps outcomes to exit codes |
-| `workflow.py` | Stage driver, per-stage checkpoints (factory commit of `runs/<id>`), stages branch → merge |
+| `workflow.py` | Stage driver, per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge |
 | `improve.py` | Improve phase: improver ideas, human decisions, `improvements.jsonl`, scope enforcement |
 | `pi.py` | Pi subprocess, JSONL parsing, success detection, contract validation + re-prompts |
 | `run.py` | `RunState` (Pydantic), `events.jsonl` emitter, token aggregation, `RunLock` |

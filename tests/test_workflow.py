@@ -79,11 +79,8 @@ def test_happy_path(factory, target, fake_pi):
     assert (target / "app.py").exists() and (target / "docs/app.md").exists()
     assert (target / "docs/coding-standards.md").exists() and (target / "AGENTS.md").exists()
     assert len(sh(target, "git", "log", "-1", "--format=%P").split()) == 2
-    # factory: run artefacts committed, one commit per stage at least
-    log = sh(factory, "git", "log", "--format=%s")
-    for stage in ("branch", "prompt", "plan", "implement", "document", "merge", "improve"):
-        assert f": {stage} —" in log
-    assert not sh(factory, "git", "status", "--porcelain", "runs")
+    # factory: run artefacts are never committed
+    assert "runs/" not in sh(factory, "git", "log", "--name-only", "--format=")
     # validation skipped (template has no commands) and logged
     events = [json.loads(l) for l in (run.dir / "events.jsonl").read_text().splitlines()]
     assert any(e.get("type") == "validation_skipped" for e in events)
@@ -91,7 +88,6 @@ def test_happy_path(factory, target, fake_pi):
     git_events = [e for e in events if e.get("type", "").startswith("git_")]
     assert {e["type"] for e in git_events} == {"git_checkout", "git_commit", "git_merge"}
     assert any(e["type"] == "git_commit" and e["repo"] == "target" for e in git_events)
-    assert any(e["type"] == "git_commit" and e["repo"] == "factory" for e in git_events)
     assert [c["agent"] for c in calls(s)] == ["planner", "implementer", "reviewer", "documenter", "improver"]
     assert json.loads((run.dir / "run-state.json").read_text())["tokens"]["by_stage"]["implement"]["input"] == 20
 
@@ -161,6 +157,8 @@ def test_documenter_scope_enforced(factory, target, fake_pi):
         wf.execute()
     assert (target / "app.py").read_text() == "print(1)\n"
     assert run.state.status == "failed"
+    events = [json.loads(line) for line in (run.dir / "events.jsonl").read_text().splitlines()]
+    assert any(e.get("type") == "git_revert" and e["repo"] == "target" for e in events)
 
 
 def test_merge_conflict_aborts(factory, target, fake_pi):

@@ -67,12 +67,12 @@ pi --mode json --model <model> --thinking <thinking> --tools <tools> \
 ## 6. Workflow
 
 1. **Branch.** Create a new branch `sf/<run-id>` in the target, off the trunk.
-2. **Prompt.** Save the prompt to `runs/<id>/prompt.md`. Commit.
-3. **Plan.** The planner produces `plan.md`. Commit. With `--approve-plan`, a human approves the plan before the run continues.
+2. **Prompt.** Save the prompt to `runs/<id>/prompt.md`.
+3. **Plan.** The planner produces `plan.md`. With `--approve-plan`, a human approves the plan before the run continues.
 4. **Implement ⇄ Review**, for up to **5 loops**:
    - **Implementer.** Starts a fresh session each loop, with the plan, the latest review findings and the latest validation output. It follows **no** coding standards and simply delivers the planned work. Commit.
    - **Validation.** The orchestrator runs the commands listed in `docs/VALIDATION.md`. If there are none, validation is skipped and the skip is logged. On failure, control returns to the implementer without running the reviewer, and this counts as a loop.
-   - **Reviewer.** Reviews the work against `docs/coding-standards.md`. It returns `{verdict: approve|changes_requested, findings[]}`, which is written to `review-<n>.md`. Commit.
+   - **Reviewer.** Reviews the work against `docs/coding-standards.md`. It returns `{verdict: approve|changes_requested, findings[]}`, which is written to `review-<n>.md`.
    - **Cap reached.** If the reviewer has not approved after 5 loops, a human chooses: merge anyway, abort, or allow N more loops. This outcome is flagged to the improve phase.
 5. **Document.** The documenter diffs `trunk...branch`. It updates existing docs and may create new docs only under `docs/`. It must not touch code or the standards files. Commit.
 6. **Merge.** Local `git merge --no-ff` into the trunk. If there is a conflict, the run aborts.
@@ -83,11 +83,11 @@ pi --mode json --model <model> --thinking <thinking> --tools <tools> \
      - **Allowed to change:** `agents/*.md` (committed in the factory repo, with the run-id in the commit message) and the target's `AGENTS.md`, `docs/VALIDATION.md`, `docs/coding-standards.md` and `docs/architecture.md` (a follow-up commit on the target trunk).
      - **Not allowed to change:** the orchestrator code.
 
-Each stage is committed as it completes.
+Run state is saved to `runs/<id>/run-state.json` as each stage completes.
 
 ## 7. Observability
 
-`runs/<run-id>/` is committed to the factory repo and contains:
+`runs/<run-id>/` is git-ignored (never committed) and contains:
 
 - `events.jsonl`: one stream holding every Pi event and every orchestrator event, in real time. Each line is tagged with `run_id`, `stage`, `loop` and `ts`.
 - `sessions/`: Pi session transcripts.

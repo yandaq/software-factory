@@ -96,10 +96,8 @@ class Workflow:
         self._checkpoint(result)
 
     def _checkpoint(self, what: str) -> None:
+        """Persist run state; `runs/` is git-ignored, so checkpoints are not committed."""
         self.run.save()
-        self.commit(
-            self.factory, f"sf {self.state.run_id}: {self.state.stage} — {what}", (f"runs/{self.state.run_id}",)
-        )
 
     def git(self, repo: Path, *args: str, check: bool = True) -> str:
         """A state-changing git command, logged as a `git_<subcommand>` event for the dashboard."""
@@ -115,6 +113,11 @@ class Workflow:
             return False
         self.run.log("git_commit", repo=self._repo_name(repo), message=message)
         return g.commit_all(repo, message, paths)
+
+    def revert(self, repo: Path, paths: list[str]) -> None:
+        """`g.revert_paths`, logged as a `git_revert` event."""
+        self.run.log("git_revert", repo=self._repo_name(repo), paths=paths)
+        g.revert_paths(repo, paths)
 
     def _repo_name(self, repo: Path) -> str:
         return "factory" if repo == self.factory else "target"
@@ -242,7 +245,7 @@ class Workflow:
         )
         violations = [p for status, p in g.changed_paths(self.run.target) if not _doc_change_allowed(status, p)]
         if violations:
-            g.revert_paths(self.run.target, violations)
+            self.revert(self.run.target, violations)
             self.run.log("scope_violation", agent="documenter", paths=violations)
             raise StageFailed(f"documenter changed files outside its scope: {violations}")
         self._commit_target("document")

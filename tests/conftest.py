@@ -29,6 +29,7 @@ def factory(tmp_path: Path) -> Path:
     f.mkdir()
     shutil.copytree(ROOT / "agents", f / "agents")
     shutil.copytree(ROOT / "templates", f / "templates")
+    shutil.copy(ROOT / ".gitignore", f / ".gitignore")
     init_repo(f)
     return f
 

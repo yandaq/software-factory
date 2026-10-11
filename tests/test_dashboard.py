@@ -25,6 +25,7 @@ def server(tmp_path, monkeypatch):
     run.state.stage, run.state.loop = "implement", 1
     run.state.results["review-1"] = "approve"
     run.log("stage_start")
+    run.log("pi_start", agent="implementer", cmd=["pi", "--model", "anthropic/claude-x", "--thinking", "high"])
     run.emit("pi", {"agent": "implementer", "event": {"type": "tool_execution_start", "toolName": "bash", "args": {}}})
     end = {"type": "message_end", "message": {"role": "assistant", "usage": {"totalTokens": 1234}}}
     run.emit("pi", {"agent": "implementer", "invocation": 1, "event": end})
@@ -56,12 +57,14 @@ def test_runs_list_includes_unreadable(server):
 def test_run_detail(server):
     d = json.loads(get(server + "/api/runs/r1"))
     assert d["state"]["results"]["review-1"] == "approve"
-    assert [e["type"] for e in d["events"]] == ["stage_start"]
+    assert [e["type"] for e in d["events"]] == ["stage_start", "pi_start"]
+    assert d["agents"] == {"implementer": {"model": "anthropic/claude-x", "thinking": "high"}}
     assert d["tools"][0]["event"]["toolName"] == "bash"
     assert d["artefacts"] == ["plan.md"]
     assert d["events_updated"] > 0
     assert [p[1:] for p in d["timeline"]] == [
         ["sf", "stage_start", None, None],
+        ["implementer", "pi_start", None, None],
         ["implementer", "tool_execution_start", None, None],
         ["implementer", "message_end", 1234, 1],
     ]
@@ -73,6 +76,17 @@ def test_artefact_and_path_safety(server):
         with pytest.raises(urllib.error.HTTPError) as e:
             get(server + bad)
         assert e.value.code == 404
+
+
+def test_delete_run(server, tmp_path):
+    for bad in ("nope", ".."):
+        req = urllib.request.Request(f"{server}/api/runs/{bad}", method="DELETE")
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        assert e.value.code == 404
+    urllib.request.urlopen(urllib.request.Request(server + "/api/runs/r1", method="DELETE")).close()
+    assert not (tmp_path / "runs" / "r1").exists()
+    assert [r["run_id"] for r in json.loads(get(server + "/api/runs"))] == ["broken"]
 
 
 def put(url, body):

@@ -23,6 +23,10 @@ aside h1 { font-size: 15px; margin: 0; padding: 14px 16px; border-bottom: 1px so
 .run:hover, .run.sel { background: var(--chip); }
 .run .id { font-family: var(--mono); font-size: 13px; }
 .run .meta { color: var(--muted); font-size: 12px; }
+.run { position: relative; }
+.run .del { position: absolute; top: 8px; right: 10px; border: 0; background: none; color: var(--muted);
+            cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: 4px; }
+.run .del:hover { color: var(--bad); background: var(--panel); }
 main { padding: 20px; min-width: 0; }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
@@ -64,13 +68,16 @@ pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; backgrou
   <main id="main"><p class="muted">Select a run.</p></main>
 </div>
 <script>
+// Display names for stages whose internal name reads badly on the dashboard.
+const STAGE_LABELS = {branch: "sf"};
+const stageLabel = st => STAGE_LABELS[st] || st;
 const STAGES = ["branch", "prompt", "plan", "implement", "document", "merge", "improve"];
 let selected = location.hash.slice(1) || null;
 let openArtefact = null;
 const LANE_COLOURS = ["#2f5bd3", "#1f8a4c", "#c53030", "#b7791f", "#7b3fc4", "#0f8a8a", "#d4489a", "#5f6b2a"];
 // A "running" run whose event log has gone quiet this long is treated as dead (e.g. a crashed orchestrator).
 const STALE_MS = 5 * 60 * 1000;
-const LANE_H = 34, LABEL_W = 130, AXIS_H = 22, DOT_R = 5, CTX_H = 120;
+const LANE_H = 34, LABEL_W = 170, AXIS_H = 22, DOT_R = 5, CTX_H = 120;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = c => "$" + (c || 0).toFixed(4);
@@ -87,9 +94,10 @@ async function refreshRuns() {
   if (!selected && runs.length) selected = runs[0].run_id;
   document.getElementById("runs").innerHTML = runs.map(r => `
     <div class="run ${r.run_id === selected ? "sel" : ""}" data-id="${esc(r.run_id)}">
+      <button class="del" title="Delete run ${esc(r.run_id)}" aria-label="Delete run">🗑</button>
       <div class="id">${esc(r.run_id)}</div>
       <div class="meta"><span class="status s-${esc(r.status)}">${esc(r.status)}</span>
-        · ${esc(r.stage)}${r.loop ? " #" + r.loop : ""} · ${money(r.cost)}</div>
+        · ${esc(stageLabel(r.stage))}${r.loop ? " #" + r.loop : ""} · ${money(r.cost)}</div>
     </div>`).join("") || `<p class="muted" style="padding:16px">No runs yet.</p>`;
 }
 
@@ -140,7 +148,7 @@ const kTokens = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 // Swimlane chart: one lane per agent plus "sf" for the orchestrator, one dot per event, x = seconds since run start.
 // Below the lanes, one line per agent invocation plots its context size (tokens) after each assistant turn.
 // While the run is live the axis extends to "now", so it autoscales as time passes.
-function timelineSvg(points, live) {
+function timelineSvg(points, live, agents) {
   if (!points.length) return '<p class="muted">No events yet.</p>';
   const width = Math.max(document.getElementById("main").clientWidth - 72, 300);
   const t0 = Date.parse(points[0][0]);
@@ -165,8 +173,8 @@ function timelineSvg(points, live) {
       <text x="${x(t)}" y="${height - 6}" text-anchor="middle">${fmtSecs(t)}</text>`;
   }
   const rows = lanes.map((lane, i) => `<line x1="${LABEL_W}" x2="${width}" y1="${(i + 1) * LANE_H}" y2="${(i + 1) * LANE_H}"/>
-    <text class="lane-label" x="0" y="${i * LANE_H + LANE_H / 2 + 4}">${esc(lane)}${lane in latest
-      ? ` <tspan class="muted">${kTokens(latest[lane])}</tspan>` : ""}</text>`).join("");
+    <text class="lane-label" x="0" y="${i * LANE_H + (agents[lane] ? 14 : LANE_H / 2 + 4)}">${esc(lane)}${lane in latest
+      ? ` <tspan class="muted">${kTokens(latest[lane])}</tspan>` : ""}</text>${agents[lane] ? agentModel(agents[lane], i) : ""}`).join("");
   const dots = points.map(([ts, lane, type, tokens]) => {
     const secs = secsOf(ts);
     const cx = x(secs), cy = lanes.indexOf(lane) * LANE_H + LANE_H / 2;
@@ -193,6 +201,14 @@ function timelineSvg(points, live) {
   return `<svg width="${width}" height="${height}" role="img" aria-label="Agent activity timeline">${ticks}${rows}${dots}${context}</svg>`;
 }
 
+// Model and thinking effort under an agent's lane label, the model's provider prefix dropped to fit.
+function agentModel({model, thinking}, i) {
+  const full = `${model} · ${thinking}`;
+  let short = `${(model || "?").split("/").pop()} · ${thinking || "?"}`;
+  if (short.length > 28) short = short.slice(0, 27) + "…";
+  return `<text x="0" y="${i * LANE_H + 28}"><title>${esc(full)}</title>${esc(short)}</text>`;
+}
+
 async function refreshDetail() {
   const main = document.getElementById("main");
   if (!selected) return;
@@ -200,10 +216,10 @@ async function refreshDetail() {
   const s = d.state;
   const stages = STAGES.map(st => {
     const cls = s.completed.includes(st) ? "done" : st === s.stage ? `current ${s.status}` : "";
-    return `<span class="stage ${cls}" title="${esc(s.results[st] || "")}">${st}</span>`;
+    return `<span class="stage ${cls}" title="${esc(s.results[st] || "")}">${stageLabel(st)}</span>`;
   }).join("");
   const results = STAGES.filter(st => s.results[st])
-    .map(st => `<tr><td>${st}</td><td>${esc(s.results[st])}</td></tr>`).join("");
+    .map(st => `<tr><td>${stageLabel(st)}</td><td>${esc(s.results[st])}</td></tr>`).join("");
   main.innerHTML = `
     <section>
       <h2>Run ${esc(s.run_id)}</h2>
@@ -213,7 +229,7 @@ async function refreshDetail() {
       <div class="stages">${stages}</div>
     </section>
     <section class="timeline"><h2>Activity</h2>${timelineSvg(d.timeline,
-      s.status === "running" && Date.now() - d.events_updated * 1000 < STALE_MS)}</section>
+      s.status === "running" && Date.now() - d.events_updated * 1000 < STALE_MS, d.agents)}</section>
     <div class="grid">
       <section><h2>Stage results</h2><table>${results || '<tr><td class="muted">None yet.</td></tr>'}</table></section>
       <section><h2>Loops</h2><table><tr><th>#</th><th>Validation</th><th>Review</th></tr>${loopRows(s)}</table></section>
@@ -238,7 +254,19 @@ async function showArtefact(name) {
   pre.textContent = r.ok ? await r.text() : `Could not load ${name}: HTTP ${r.status}`;
 }
 
+async function deleteRun(id) {
+  if (!confirm(`Delete run ${id} and all its files? This cannot be undone.`)) return;
+  const r = await fetch("/api/runs/" + encodeURIComponent(id), {method: "DELETE"});
+  if (!r.ok) throw new Error(`delete ${id}: HTTP ${r.status}`);
+  if (selected === id) { selected = null; openArtefact = null; location.hash = "";
+    document.getElementById("main").innerHTML = '<p class="muted">Select a run.</p>'; }
+  tick();
+}
+
 document.addEventListener("click", e => {
+  const del = e.target.closest(".del");
+  if (del) return void deleteRun(del.closest(".run").dataset.id).catch(err => {
+    console.error(err); alert(err.message); });
   const run = e.target.closest(".run");
   if (run) { selected = run.dataset.id; openArtefact = null; location.hash = selected; tick(); }
   const art = e.target.closest(".art");

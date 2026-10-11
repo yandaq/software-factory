@@ -1,10 +1,11 @@
 """Local web dashboard over `runs/*/` (stdlib HTTP server, polled JSON API).
 
-Runs are read-only; the config page edits only the `model` and `thinking` frontmatter of `agents/*.md`.
+Runs are read-only apart from whole-run deletion; the config page edits only the `model` and `thinking` frontmatter of `agents/*.md`.
 """
 
 import json
 import re
+import shutil
 import subprocess
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -52,12 +53,35 @@ def run_detail(runs_dir: Path, run_id: str) -> dict[str, Any] | None:
     updated = events_path.stat().st_mtime if events_path.exists() else None
     return {
         "state": state,
+        "agents": _agent_models([json.loads(line) for line in lines if '"pi_start"' in line]),
         "events": events,
         "tools": tools,
         "artefacts": artefacts,
         "timeline": timeline,
         "events_updated": updated,
     }
+
+
+def _agent_models(events: list[dict[str, Any]]) -> dict[str, dict[str, str | None]]:
+    """{agent: {model, thinking}} from each agent's latest `pi_start` command line."""
+    models = {}
+    for e in events:
+        if e.get("type") == "pi_start":
+            cmd = e.get("cmd") or []
+            models[e["agent"]] = {"model": _flag(cmd, "--model"), "thinking": _flag(cmd, "--thinking")}
+    return models
+
+
+def _flag(cmd: list[str], name: str) -> str | None:
+    return cmd[cmd.index(name) + 1] if name in cmd[:-1] else None
+
+
+def delete_run(runs_dir: Path, run_id: str) -> bool:
+    run_dir = _run_dir(runs_dir, run_id)
+    if run_dir is None:
+        return False
+    shutil.rmtree(run_dir)
+    return True
 
 
 def _timeline_point(line: str) -> list[Any] | None:
@@ -155,6 +179,12 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 text = artefact(runs_dir, parts[2], parts[3])
                 if text is not None:
                     return self._send(text.encode(), "text/plain; charset=utf-8")
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+        def do_DELETE(self) -> None:
+            parts = [p for p in self.path.split("?")[0].split("/") if p]
+            if len(parts) == 3 and parts[:2] == ["api", "runs"] and delete_run(runs_dir, parts[2]):
+                return self._send(b"{}", "application/json")
             self.send_error(HTTPStatus.NOT_FOUND)
 
         def do_PUT(self) -> None:

@@ -108,7 +108,7 @@ def _apply(wf: Workflow, idea: dict[str, Any], note: str) -> None:
     for repo, ok in ((factory, factory_ok), (target, lambda p: p in STANDARDS_FILES)):
         bad = [p for _, p in g.changed_paths(repo) if not ok(p)]
         if bad:
-            g.revert_paths(repo, bad)
+            wf.revert(repo, bad)
             run.log("scope_violation", agent="improvement-implementer", repo=str(repo), paths=bad)
             wf.display.note(f"[red]reverted out-of-scope changes in {repo}: {bad}[/]")
 
