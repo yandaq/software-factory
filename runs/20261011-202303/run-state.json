@@ -15,7 +15,8 @@
     "plan",
     "implement",
     "document",
-    "merge"
+    "merge",
+    "improve"
   ],
   "results": {
     "branch": "on sf/20261011-202303; installed AGENTS.md, docs/VALIDATION.md, docs/coding-standards.md, docs/architecture.md",
@@ -27,7 +28,8 @@
     "review-4": "changes_requested",
     "review-5": "approve",
     "document": "Updated README documentation to accurately reflect runtime requirements, persistence paths, autosave behavior, API errors, request-size limits, and multiline text support.",
-    "merge": "merged sf/20261011-202303 into master"
+    "merge": "merged sf/20261011-202303 into master",
+    "improve": "4 approved, 0 skipped, 0 rejected"
   },
   "invocations": [
     {
@@ -183,15 +185,85 @@
         "cache_write": 0,
         "cost": 0.17450879999999996
       }
+    },
+    {
+      "agent": "improver",
+      "stage": "improve",
+      "loop": 5,
+      "n": 1,
+      "ok": true,
+      "usage": {
+        "input": 112582,
+        "output": 4212,
+        "cache_read": 155776,
+        "cache_write": 0,
+        "cost": 0.5968784
+      }
+    },
+    {
+      "agent": "improvement-implementer",
+      "stage": "improve",
+      "loop": 5,
+      "n": 2,
+      "ok": true,
+      "usage": {
+        "input": 12633,
+        "output": 737,
+        "cache_read": 14592,
+        "cache_write": 0,
+        "cost": 0.07110879999999999
+      }
+    },
+    {
+      "agent": "improvement-implementer",
+      "stage": "improve",
+      "loop": 5,
+      "n": 3,
+      "ok": true,
+      "usage": {
+        "input": 8229,
+        "output": 607,
+        "cache_read": 18432,
+        "cache_write": 0,
+        "cost": 0.052428800000000005
+      }
+    },
+    {
+      "agent": "improvement-implementer",
+      "stage": "improve",
+      "loop": 5,
+      "n": 4,
+      "ok": true,
+      "usage": {
+        "input": 17294,
+        "output": 1517,
+        "cache_read": 21504,
+        "cache_write": 0,
+        "cost": 0.1081176
+      }
+    },
+    {
+      "agent": "improvement-implementer",
+      "stage": "improve",
+      "loop": 5,
+      "n": 5,
+      "ok": true,
+      "usage": {
+        "input": 15660,
+        "output": 642,
+        "cache_read": 11520,
+        "cache_write": 0,
+        "cost": 0.080088
+      }
     }
   ],
   "tokens": {
     "run": {
-      "input": 409332,
-      "output": 132734,
-      "cache_read": 6269227,
+      "input": 575730,
+      "output": 140449,
+      "cache_read": 6491051,
       "cache_write": 0,
-      "cost": 1.8632695999999997
+      "cost": 2.7718911999999998
     },
     "by_stage": {
       "plan": {
@@ -214,6 +286,13 @@
         "cache_read": 84352,
         "cache_write": 0,
         "cost": 0.17450879999999996
+      },
+      "improve": {
+        "input": 166398,
+        "output": 7715,
+        "cache_read": 221824,
+        "cache_write": 0,
+        "cost": 0.9086216000000001
       }
     },
     "by_loop": {
