@@ -106269,3 +106269,5 @@
 {"ts": "2026-10-11T20:45:32.820984+00:00", "run_id": "20261011-202303", "stage": "improve", "loop": 5, "source": "sf", "type": "git_commit", "repo": "factory", "message": "sf 20261011-202303: improvement decisions"}
 {"ts": "2026-10-11T20:45:32.928710+00:00", "run_id": "20261011-202303", "stage": "improve", "loop": 5, "source": "sf", "type": "stage_end", "result": "4 approved, 0 skipped, 0 rejected"}
 {"ts": "2026-10-11T20:45:32.956048+00:00", "run_id": "20261011-202303", "stage": "improve", "loop": 5, "source": "sf", "type": "git_commit", "repo": "factory", "message": "sf 20261011-202303: improve \u2014 4 approved, 0 skipped, 0 rejected"}
+{"ts": "2026-10-11T20:45:39.361089+00:00", "run_id": "20261011-202303", "stage": "improve", "loop": 5, "source": "sf", "type": "run_done"}
+{"ts": "2026-10-11T20:45:39.381060+00:00", "run_id": "20261011-202303", "stage": "improve", "loop": 5, "source": "sf", "type": "git_commit", "repo": "factory", "message": "sf 20261011-202303: improve \u2014 done"}
