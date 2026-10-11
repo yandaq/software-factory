@@ -61,7 +61,7 @@ def run_detail(runs_dir: Path, run_id: str) -> dict[str, Any] | None:
 
 
 def _timeline_point(line: str) -> list[Any] | None:
-    """[ts, lane, type, context, invocation] for one event; the lane is the agent when there is one, else the stage.
+    """[ts, lane, type, context, invocation] for one event; the lane is the agent when there is one, else "sf" (the orchestrator).
 
     context is the agent's context size in tokens after an assistant turn (pi's usage.totalTokens), else None;
     invocation numbers the agent's pi process (each starts with a fresh context), None for orchestrator events.
@@ -74,7 +74,7 @@ def _timeline_point(line: str) -> list[Any] | None:
     context = None
     if kind == "message_end" and inner["message"].get("role") == "assistant":
         context = (inner["message"].get("usage") or {}).get("totalTokens")
-    return [e["ts"], e.get("agent") or e["stage"], kind, context, e.get("invocation")]
+    return [e["ts"], e.get("agent") or "sf", kind, context, e.get("invocation")]
 
 
 def artefact(runs_dir: Path, run_id: str, name: str) -> str | None:

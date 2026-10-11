@@ -87,6 +87,11 @@ def test_happy_path(factory, target, fake_pi):
     # validation skipped (template has no commands) and logged
     events = [json.loads(l) for l in (run.dir / "events.jsonl").read_text().splitlines()]
     assert any(e.get("type") == "validation_skipped" for e in events)
+    # git actions are logged for the dashboard's sf lane
+    git_events = [e for e in events if e.get("type", "").startswith("git_")]
+    assert {e["type"] for e in git_events} == {"git_checkout", "git_commit", "git_merge"}
+    assert any(e["type"] == "git_commit" and e["repo"] == "target" for e in git_events)
+    assert any(e["type"] == "git_commit" and e["repo"] == "factory" for e in git_events)
     assert [c["agent"] for c in calls(s)] == ["planner", "implementer", "reviewer", "documenter", "improver"]
     assert json.loads((run.dir / "run-state.json").read_text())["tokens"]["by_stage"]["implement"]["input"] == 20
 

@@ -5,7 +5,7 @@
   "branch": "sf/20261011-202303",
   "approve_plan": false,
   "status": "running",
-  "stage": "merge",
+  "stage": "improve",
   "loop": 5,
   "max_loops": 5,
   "cap_reached": false,

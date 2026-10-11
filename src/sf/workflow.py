@@ -97,22 +97,38 @@ class Workflow:
 
     def _checkpoint(self, what: str) -> None:
         self.run.save()
-        g.commit_all(
-            self.factory,
-            f"sf {self.state.run_id}: {self.state.stage} — {what}",
-            (f"runs/{self.state.run_id}",),
+        self.commit(
+            self.factory, f"sf {self.state.run_id}: {self.state.stage} — {what}", (f"runs/{self.state.run_id}",)
         )
+
+    def git(self, repo: Path, *args: str, check: bool = True) -> str:
+        """A state-changing git command, logged as a `git_<subcommand>` event for the dashboard."""
+        self.run.log(f"git_{args[0]}", repo=self._repo_name(repo), args=list(args[1:]))
+        return g.git(repo, *args, check=check)
+
+    def commit(self, repo: Path, message: str, paths: tuple[str, ...] = (".",)) -> bool:
+        """`g.commit_all`, logged as a `git_commit` event when there is something to commit.
+
+        Logged before committing so a checkpoint's own event lands in that checkpoint's commit.
+        """
+        if not g.git(repo, "status", "--porcelain", "--", *paths).strip():
+            return False
+        self.run.log("git_commit", repo=self._repo_name(repo), message=message)
+        return g.commit_all(repo, message, paths)
+
+    def _repo_name(self, repo: Path) -> str:
+        return "factory" if repo == self.factory else "target"
 
     def _agent(self, name: str, task: str, cwd: Path | None = None) -> dict[str, Any]:
         agent = load_agent(self.factory / "agents", name)
         return run_agent(self.run, agent, task, cwd or self.run.target, self.display)
 
     def _commit_target(self, what: str) -> bool:
-        return g.commit_all(self.run.target, f"sf {self.state.run_id}: {what}")
+        return self.commit(self.run.target, f"sf {self.state.run_id}: {what}")
 
     def _on_branch(self) -> None:
         if g.git(self.run.target, "branch", "--show-current").strip() != self.state.branch:
-            g.git(self.run.target, "checkout", self.state.branch)
+            self.git(self.run.target, "checkout", self.state.branch)
 
     # -- stages ------------------------------------------------------------
     def stage_branch(self) -> str:
@@ -124,9 +140,9 @@ class Workflow:
         except TrunkError as e:
             raise StageFailed(str(e)) from e
         if g.git(target, "branch", "--list", self.state.branch).strip():
-            g.git(target, "checkout", self.state.branch)
+            self.git(target, "checkout", self.state.branch)
         else:
-            g.git(target, "checkout", "-b", self.state.branch, self.state.trunk)
+            self.git(target, "checkout", "-b", self.state.branch, self.state.trunk)
         try:
             copied = install_missing_standards(target, self.factory / "templates")
         except StandardsError as e:
@@ -234,9 +250,9 @@ class Workflow:
 
     def stage_merge(self) -> str:
         target = self.run.target
-        g.git(target, "checkout", self.state.trunk)
+        self.git(target, "checkout", self.state.trunk)
         try:
-            g.git(
+            self.git(
                 target,
                 "merge",
                 "--no-ff",
@@ -245,7 +261,7 @@ class Workflow:
                 f"sf {self.state.run_id}: merge {self.state.branch}",
             )
         except g.GitError as e:
-            g.git(target, "merge", "--abort", check=False)
+            self.git(target, "merge", "--abort", check=False)
             raise Aborted(f"merge conflict: {e}") from e
         return f"merged {self.state.branch} into {self.state.trunk}"
 

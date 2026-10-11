@@ -61,7 +61,7 @@ def test_run_detail(server):
     assert d["artefacts"] == ["plan.md"]
     assert d["events_updated"] > 0
     assert [p[1:] for p in d["timeline"]] == [
-        ["implement", "stage_start", None, None],
+        ["sf", "stage_start", None, None],
         ["implementer", "tool_execution_start", None, None],
         ["implementer", "message_end", 1234, 1],
     ]

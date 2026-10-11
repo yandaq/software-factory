@@ -137,7 +137,7 @@ function fmtSecs(t) {
 
 const kTokens = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
-// Swimlane chart: one lane per stage/agent, one dot per event, x = seconds since run start.
+// Swimlane chart: one lane per agent plus "sf" for the orchestrator, one dot per event, x = seconds since run start.
 // Below the lanes, one line per agent invocation plots its context size (tokens) after each assistant turn.
 // While the run is live the axis extends to "now", so it autoscales as time passes.
 function timelineSvg(points, live) {
@@ -169,9 +169,13 @@ function timelineSvg(points, live) {
       ? ` <tspan class="muted">${kTokens(latest[lane])}</tspan>` : ""}</text>`).join("");
   const dots = points.map(([ts, lane, type, tokens]) => {
     const secs = secsOf(ts);
-    return `<circle cx="${x(secs)}" cy="${lanes.indexOf(lane) * LANE_H + LANE_H / 2}" r="${DOT_R}" fill="${colour(lane)}"
-      fill-opacity="0.75"><title>${esc(lane)} · ${esc(type)} · ${secs.toFixed(1)}s${tokens != null
-        ? ` · context ${tokens} tokens` : ""}</title></circle>`;
+    const cx = x(secs), cy = lanes.indexOf(lane) * LANE_H + LANE_H / 2;
+    const title = `<title>${esc(lane)} · ${esc(type)} · ${secs.toFixed(1)}s${tokens != null
+      ? ` · context ${tokens} tokens` : ""}</title>`;
+    // Git actions (git_commit, git_checkout, git_merge) are squares so they stand out on the sf lane.
+    if (type.startsWith("git_")) return `<rect x="${cx - DOT_R}" y="${cy - DOT_R}" width="${DOT_R * 2}" height="${DOT_R * 2}"
+      fill="${colour(lane)}">${title}</rect>`;
+    return `<circle cx="${cx}" cy="${cy}" r="${DOT_R}" fill="${colour(lane)}" fill-opacity="0.75">${title}</circle>`;
   }).join("");
   let context = "";
   if (ctx.length) {

@@ -32,7 +32,7 @@ def _norm(title: str) -> str:
 
 def improve(wf: Workflow) -> str:
     run, state, factory, target = wf.run, wf.state, wf.factory, wf.run.target
-    g.git(target, "checkout", state.trunk)
+    wf.git(target, "checkout", state.trunk)
     decisions = load_decisions(factory)
     rejected = {_norm(d["title"]) for d in decisions if d["decision"] == "rejected"}
 
@@ -79,7 +79,7 @@ def improve(wf: Workflow) -> str:
         run.log("idea_decision", title=idea["title"], decision=decision, note=note)
         if decision == "approved":
             _apply(wf, idea, note)
-    g.commit_all(factory, f"sf {state.run_id}: improvement decisions", (IMPROVEMENTS,))
+    wf.commit(factory, f"sf {state.run_id}: improvement decisions", (IMPROVEMENTS,))
     return ", ".join(f"{v} {k}" for k, v in counts.items())
 
 
@@ -113,7 +113,7 @@ def _apply(wf: Workflow, idea: dict[str, Any], note: str) -> None:
             wf.display.note(f"[red]reverted out-of-scope changes in {repo}: {bad}[/]")
 
     msg = f"sf {state.run_id}: improvement — {idea['title']}"
-    if g.commit_all(factory, msg, ("agents",)):
+    if wf.commit(factory, msg, ("agents",)):
         run.log("improvement_committed", repo="factory", title=idea["title"])
-    if g.commit_all(target, msg, STANDARDS_FILES):
+    if wf.commit(target, msg, STANDARDS_FILES):
         run.log("improvement_committed", repo="target", title=idea["title"])
