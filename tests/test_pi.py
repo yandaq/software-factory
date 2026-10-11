@@ -53,7 +53,7 @@ def test_invalid_contract_reprompts_in_same_session(run, fake_pi, tmp_path):
     assert len(c) == 3
     session = c[1]["argv"][c[1]["argv"].index("--session") + 1]
     assert c[2]["argv"][c[2]["argv"].index("--session") + 1] == session
-    assert "plan: 3 is not of type 'string'" in c[2]["argv"][-1]
+    assert "plan: 3 is not of type 'string'" in c[2]["message"]
     assert run.state.invocations[0].usage.input == 30
 
 
@@ -66,3 +66,12 @@ def test_contract_fails_after_two_reprompts(run, fake_pi, tmp_path):
 
 def test_extract_json_takes_last_object():
     assert extract_json('a {"x": {"y": 1}} b {"z": 2}') == {"z": 2}
+
+
+def test_task_passed_as_file_not_argv(run, fake_pi, tmp_path):
+    # An agent running `pkill -f "node main.js"` must not match its own pi process via the task text.
+    script = fake_pi({"planner": [{"text": '{"plan": "ok"}'}]})
+    run_agent(run, planner(), "start it with node main.js", tmp_path)
+    (c,) = calls(script)
+    assert c["message"].startswith("start it with node main.js")
+    assert not any("node main.js" in a for a in c["argv"])

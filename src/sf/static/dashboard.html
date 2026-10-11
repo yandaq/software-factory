@@ -45,6 +45,11 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 a.art { color: var(--accent); cursor: pointer; margin-right: 12px; display: inline-block; font-family: var(--mono); font-size: 12px; }
 pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; background: var(--chip); padding: 12px; border-radius: 6px; max-height: 480px; overflow: auto; margin: 10px 0 0; }
 .err { color: var(--bad); }
+.timeline svg { display: block; width: 100%; }
+.timeline text { fill: var(--muted); font-size: 11px; font-family: system-ui, sans-serif; }
+.timeline .lane-label { fill: var(--text); font-size: 12px; }
+.timeline line { stroke: var(--line); }
+.timeline .ctx-line { fill: none; stroke-width: 2; }
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; }
   aside { border-right: 0; max-height: 40vh; }
@@ -62,6 +67,10 @@ pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; backgrou
 const STAGES = ["branch", "prompt", "plan", "implement", "document", "merge", "improve"];
 let selected = location.hash.slice(1) || null;
 let openArtefact = null;
+const LANE_COLOURS = ["#2f5bd3", "#1f8a4c", "#c53030", "#b7791f", "#7b3fc4", "#0f8a8a", "#d4489a", "#5f6b2a"];
+// A "running" run whose event log has gone quiet this long is treated as dead (e.g. a crashed orchestrator).
+const STALE_MS = 5 * 60 * 1000;
+const LANE_H = 34, LABEL_W = 130, AXIS_H = 22, DOT_R = 5, CTX_H = 120;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = c => "$" + (c || 0).toFixed(4);
@@ -117,6 +126,69 @@ function toolLine(e) {
     <b>${esc(ev.toolName)}</b> ${esc(JSON.stringify(ev.args).slice(0, 160))}</div>`;
 }
 
+function niceStep(span) {
+  for (const s of [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]) if (span / s <= 8) return s;
+  return 7200;
+}
+
+function fmtSecs(t) {
+  return t < 60 ? `${t}s` : t % 60 ? `${Math.floor(t / 60)}m${t % 60}s` : `${t / 60}m`;
+}
+
+const kTokens = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+// Swimlane chart: one lane per stage/agent, one dot per event, x = seconds since run start.
+// Below the lanes, one line per agent invocation plots its context size (tokens) after each assistant turn.
+// While the run is live the axis extends to "now", so it autoscales as time passes.
+function timelineSvg(points, live) {
+  if (!points.length) return '<p class="muted">No events yet.</p>';
+  const width = Math.max(document.getElementById("main").clientWidth - 72, 300);
+  const t0 = Date.parse(points[0][0]);
+  const lanes = [...new Set(points.map(p => p[1]))];
+  const colour = lane => LANE_COLOURS[lanes.indexOf(lane) % LANE_COLOURS.length];
+  const end = live ? Date.now() : Date.parse(points[points.length - 1][0]);
+  const span = Math.max((end - t0) / 1000, 1);
+  const plotW = width - LABEL_W - DOT_R * 2;
+  const secsOf = ts => (Date.parse(ts) - t0) / 1000;
+  const x = secs => LABEL_W + DOT_R + (secs / span) * plotW;
+  const ctx = points.filter(p => p[3] != null);
+  const ctxMax = Math.max(...ctx.map(p => p[3]), 1);
+  const lanesH = lanes.length * LANE_H;
+  const plotH = lanesH + (ctx.length ? CTX_H : 0);
+  const height = plotH + AXIS_H;
+  const latest = {};
+  for (const [, lane, , tokens] of ctx) latest[lane] = tokens;
+  const step = niceStep(span);
+  let ticks = "";
+  for (let t = 0; t <= span; t += step) {
+    ticks += `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${plotH}"/>
+      <text x="${x(t)}" y="${height - 6}" text-anchor="middle">${fmtSecs(t)}</text>`;
+  }
+  const rows = lanes.map((lane, i) => `<line x1="${LABEL_W}" x2="${width}" y1="${(i + 1) * LANE_H}" y2="${(i + 1) * LANE_H}"/>
+    <text class="lane-label" x="0" y="${i * LANE_H + LANE_H / 2 + 4}">${esc(lane)}${lane in latest
+      ? ` <tspan class="muted">${kTokens(latest[lane])}</tspan>` : ""}</text>`).join("");
+  const dots = points.map(([ts, lane, type, tokens]) => {
+    const secs = secsOf(ts);
+    return `<circle cx="${x(secs)}" cy="${lanes.indexOf(lane) * LANE_H + LANE_H / 2}" r="${DOT_R}" fill="${colour(lane)}"
+      fill-opacity="0.75"><title>${esc(lane)} · ${esc(type)} · ${secs.toFixed(1)}s${tokens != null
+        ? ` · context ${tokens} tokens` : ""}</title></circle>`;
+  }).join("");
+  let context = "";
+  if (ctx.length) {
+    const y = tokens => plotH - 6 - (tokens / ctxMax) * (CTX_H - 16);
+    context = `<text class="lane-label" x="0" y="${lanesH + 18}">context</text>
+      <text x="0" y="${lanesH + 34}">max ${kTokens(ctxMax)}</text>`;
+    // One line per agent invocation: each pi process starts with a fresh context.
+    const runs = {};
+    for (const p of ctx) (runs[p[1] + "#" + p[4]] ??= []).push(p);
+    for (const pts of Object.values(runs)) {
+      const coords = pts.map(p => `${x(secsOf(p[0]))},${y(p[3])}`).join(" ");
+      context += `<polyline class="ctx-line" points="${coords}" stroke="${colour(pts[0][1])}"/>`;
+    }
+  }
+  return `<svg width="${width}" height="${height}" role="img" aria-label="Agent activity timeline">${ticks}${rows}${dots}${context}</svg>`;
+}
+
 async function refreshDetail() {
   const main = document.getElementById("main");
   if (!selected) return;
@@ -136,6 +208,8 @@ async function refreshDetail() {
       <p class="muted">${esc(s.target)} · ${esc(s.branch)} → ${esc(s.trunk)}</p>
       <div class="stages">${stages}</div>
     </section>
+    <section class="timeline"><h2>Activity</h2>${timelineSvg(d.timeline,
+      s.status === "running" && Date.now() - d.events_updated * 1000 < STALE_MS)}</section>
     <div class="grid">
       <section><h2>Stage results</h2><table>${results || '<tr><td class="muted">None yet.</td></tr>'}</table></section>
       <section><h2>Loops</h2><table><tr><th>#</th><th>Validation</th><th>Review</th></tr>${loopRows(s)}</table></section>

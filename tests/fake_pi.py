@@ -3,7 +3,8 @@
 
 Script: {"<agent>": [step, ...]}; each call consumes the agent's next step (the last repeats).
 step: {"text": str, "write": {path: content}, "stop": str, "aborted": bool, "exit": int}
-Every call's argv is appended to $FAKE_PI_SCRIPT.calls.jsonl.
+Every call's argv, and the task message read from its trailing @file, is appended to
+$FAKE_PI_SCRIPT.calls.jsonl.
 """
 
 import json
@@ -20,7 +21,8 @@ calls = script_path.with_suffix(".calls.jsonl")
 prior = [json.loads(l) for l in calls.read_text().splitlines()] if calls.exists() else []
 n = sum(1 for c in prior if c["agent"] == agent)
 with calls.open("a") as f:
-    f.write(json.dumps({"agent": agent, "argv": argv, "cwd": os.getcwd()}) + "\n")
+    message = Path(argv[-1].removeprefix("@")).read_text()
+    f.write(json.dumps({"agent": agent, "argv": argv, "message": message, "cwd": os.getcwd()}) + "\n")
 steps = script[agent]
 step = steps[min(n, len(steps) - 1)]
 for path, content in step.get("write", {}).items():

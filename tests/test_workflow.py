@@ -107,7 +107,7 @@ def test_validation_failure_skips_reviewer_and_feeds_back(factory, target, fake_
     wf.execute()
     agents = [c["agent"] for c in calls(s)]
     assert agents[:4] == ["planner", "implementer", "implementer", "reviewer"]
-    second_impl = calls(s)[2]["argv"][-1]
+    second_impl = calls(s)[2]["message"]
     assert "Latest validation output (failed)" in second_impl and "test -f ok" in second_impl
     assert run.state.results["validation-1"] == "failed" and run.state.results["implement"] == "approved in loop 2"
 
@@ -115,7 +115,7 @@ def test_validation_failure_skips_reviewer_and_feeds_back(factory, target, fake_
 def test_review_findings_fed_to_next_loop(factory, target, fake_pi):
     s = fake_pi(script(reviewer=[CHANGES, APPROVE]))
     start(factory, target)[1].execute()
-    impl2 = [c for c in calls(s) if c["agent"] == "implementer"][1]["argv"][-1]
+    impl2 = [c for c in calls(s) if c["agent"] == "implementer"][1]["message"]
     assert "bad name" in impl2 and "app.py:1" in impl2
 
 
@@ -125,7 +125,7 @@ def test_cap_reached_merge_anyway_is_flagged(factory, target, fake_pi):
     run, wf = start(factory, target, human)
     wf.execute()
     assert human.caps == 2 and run.state.loop == 7 and run.state.cap_reached
-    improver_task = next(c for c in calls(s) if c["agent"] == "improver")["argv"][-1]
+    improver_task = next(c for c in calls(s) if c["agent"] == "improver")["message"]
     assert "cap reached without approval: yes" in improver_task
 
 

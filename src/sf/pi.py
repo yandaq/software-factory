@@ -79,8 +79,12 @@ def _invoke(
     ]
     if session:
         cmd += ["--session", session]
-    cmd += ["--", message]
-    run.log("pi_start", agent=agent.name, invocation=inv.n, session=session, cmd=cmd[:-1])
+    # Pass the task as an @file, never as argv: agents that run `pkill -f <pattern>` would otherwise
+    # match (and kill) their own pi process whenever the task text contains the pattern.
+    message_file = run.dir / "prompts" / f"{inv.stage}-{inv.n}-{agent.name}-message.md"
+    message_file.write_text(message)
+    cmd += ["--", f"@{message_file}"]
+    run.log("pi_start", agent=agent.name, invocation=inv.n, session=session, cmd=cmd)
 
     result = PiResult()
     stderr_path = run.dir / f"pi-{inv.stage}-{inv.n}.stderr"

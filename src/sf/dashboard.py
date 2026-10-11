@@ -9,6 +9,8 @@ from typing import Any
 STATIC = Path(__file__).parent / "static"
 ARTEFACT_PREFIXES = ("prompt.md", "plan.md", "review-", "validation-", "pi-")
 EVENT_TAIL = 200
+# Streaming token deltas: tens of thousands per agent, too dense to be useful as timeline dots.
+TIMELINE_SKIP = {"message_update"}
 
 
 def list_runs(runs_dir: Path) -> list[dict[str, Any]]:
@@ -35,8 +37,34 @@ def run_detail(runs_dir: Path, run_id: str) -> dict[str, Any] | None:
     lines = events_path.read_text().splitlines() if events_path.exists() else []
     events = [json.loads(line) for line in lines if '"source": "sf"' in line][-EVENT_TAIL:]
     tools = [json.loads(line) for line in lines if '"tool_execution_start"' in line][-EVENT_TAIL:]
+    timeline = [p for p in map(_timeline_point, lines) if p]
     artefacts = sorted(p.name for p in run_dir.iterdir() if p.is_file() and p.name.startswith(ARTEFACT_PREFIXES))
-    return {"state": state, "events": events, "tools": tools, "artefacts": artefacts}
+    updated = events_path.stat().st_mtime if events_path.exists() else None
+    return {
+        "state": state,
+        "events": events,
+        "tools": tools,
+        "artefacts": artefacts,
+        "timeline": timeline,
+        "events_updated": updated,
+    }
+
+
+def _timeline_point(line: str) -> list[Any] | None:
+    """[ts, lane, type, context, invocation] for one event; the lane is the agent when there is one, else the stage.
+
+    context is the agent's context size in tokens after an assistant turn (pi's usage.totalTokens), else None;
+    invocation numbers the agent's pi process (each starts with a fresh context), None for orchestrator events.
+    """
+    e = json.loads(line)
+    inner = e.get("event")
+    kind = inner.get("type") if isinstance(inner, dict) else e.get("type")
+    if kind in TIMELINE_SKIP:
+        return None
+    context = None
+    if kind == "message_end" and inner["message"].get("role") == "assistant":
+        context = (inner["message"].get("usage") or {}).get("totalTokens")
+    return [e["ts"], e.get("agent") or e["stage"], kind, context, e.get("invocation")]
 
 
 def artefact(runs_dir: Path, run_id: str, name: str) -> str | None:
@@ -81,7 +109,10 @@ def make_handler(runs_dir: Path) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the browser navigated away or reloaded mid-response; nothing to deliver
 
         def log_message(self, format: str, *args: Any) -> None:
             pass  # keep the terminal quiet; errors still surface via send_error responses

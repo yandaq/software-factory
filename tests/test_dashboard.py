@@ -16,6 +16,8 @@ def server(tmp_path):
     run.state.results["review-1"] = "approve"
     run.log("stage_start")
     run.emit("pi", {"agent": "implementer", "event": {"type": "tool_execution_start", "toolName": "bash", "args": {}}})
+    end = {"type": "message_end", "message": {"role": "assistant", "usage": {"totalTokens": 1234}}}
+    run.emit("pi", {"agent": "implementer", "invocation": 1, "event": end})
     (run.dir / "plan.md").write_text("# Plan\n")
     run.save()
     (tmp_path / "runs" / "broken").mkdir()
@@ -47,6 +49,12 @@ def test_run_detail(server):
     assert [e["type"] for e in d["events"]] == ["stage_start"]
     assert d["tools"][0]["event"]["toolName"] == "bash"
     assert d["artefacts"] == ["plan.md"]
+    assert d["events_updated"] > 0
+    assert [p[1:] for p in d["timeline"]] == [
+        ["implement", "stage_start", None, None],
+        ["implementer", "tool_execution_start", None, None],
+        ["implementer", "message_end", 1234, 1],
+    ]
 
 
 def test_artefact_and_path_safety(server):
