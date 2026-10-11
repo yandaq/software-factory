@@ -9,6 +9,7 @@ from sf.console import LiveDisplay, TerminalHuman
 from sf.git import GitError
 from sf.pi import StageFailed
 from sf.run import Run, RunLock
+from sf.target import TrunkError
 from sf.workflow import Aborted, Workflow, new_run
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -49,7 +50,11 @@ def run(
     text = prompt if prompt is not None else prompt_file.read_text()  # type: ignore[union-attr]
     factory = _factory()
     with RunLock(factory):
-        r = new_run(factory, target, text, approve_plan)
+        try:
+            r = new_run(factory, target, text, approve_plan)
+        except TrunkError as e:
+            typer.echo(f"error: {e}", err=True)
+            raise typer.Exit(1) from e
         typer.echo(f"run {r.state.run_id}")
         _execute(r)
 

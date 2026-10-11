@@ -77,7 +77,7 @@ def test_happy_path(factory, target, fake_pi):
     # target: standards installed, merged with --no-ff, docs written
     assert sh(target, "git", "branch", "--show-current").strip() == "main"
     assert (target / "app.py").exists() and (target / "docs/app.md").exists()
-    assert (target / "coding-standards.md").exists()
+    assert (target / "docs/coding-standards.md").exists() and (target / "AGENTS.md").exists()
     assert len(sh(target, "git", "log", "-1", "--format=%P").split()) == 2
     # factory: run artefacts committed, one commit per stage at least
     log = sh(factory, "git", "log", "--format=%s")
@@ -147,7 +147,9 @@ def test_plan_rejected_aborts(factory, target, fake_pi):
 
 def test_documenter_scope_enforced(factory, target, fake_pi):
     fake_pi(
-        script(documenter=[{"text": '{"summary": "d"}', "write": {"app.py": "hacked", "coding-standards.md": "x"}}])
+        script(
+            documenter=[{"text": '{"summary": "d"}', "write": {"app.py": "hacked", "docs/coding-standards.md": "x"}}]
+        )
     )
     run, wf = start(factory, target)
     with pytest.raises(StageFailed, match="outside its scope"):
@@ -202,7 +204,7 @@ def test_improve_decisions_and_scope(factory, target, fake_pi):
                         "text": '{"summary": "s"}',
                         "write": {
                             str(agents_file): agents_file.read_text() + "\nBe strict.\n",
-                            str(target / "coding-standards.md"): "# stricter\n",
+                            str(target / "docs/coding-standards.md"): "# stricter\n",
                             str(target / "app.py"): "forbidden\n",
                             str(factory / "src.py"): "forbidden\n",
                         },
@@ -220,8 +222,43 @@ def test_improve_decisions_and_scope(factory, target, fake_pi):
     ]
     assert decisions[1]["note"] == "go" and decisions[1]["run_id"] == run.state.run_id
     assert "Be strict." in agents_file.read_text()
-    assert (target / "coding-standards.md").read_text() == "# stricter\n"
+    assert (target / "docs/coding-standards.md").read_text() == "# stricter\n"
     assert (target / "app.py").read_text() == "print(1)\n" and not (factory / "src.py").exists()
     assert f"sf {run.state.run_id}: improvement — Tighten reviewer" in sh(factory, "git", "log", "--format=%s")
     assert "improvement — Tighten reviewer" in sh(target, "git", "log", "-1", "main", "--format=%s")
     assert not sh(factory, "git", "status", "--porcelain")
+
+
+def test_master_trunk_used_by_default(factory, target, fake_pi):
+    sh(target, "git", "branch", "-m", "main", "master")
+    fake_pi(script())
+    run, wf = start(factory, target)
+    assert run.state.trunk == "master"
+    wf.execute()
+    assert sh(target, "git", "branch", "--show-current").strip() == "master"
+    assert (target / "app.py").exists()
+
+
+def test_resume_re_resolves_trunk_after_fix(factory, target, fake_pi):
+    fake_pi(script())
+    run, _ = start(factory, target)
+    run.state.trunk = "gone"  # e.g. a run created before main/master detection
+    run.save()
+    sh(target, "git", "branch", "-m", "main", "master")
+    loaded = Run.load(factory, run.state.run_id)
+    Workflow(loaded, Human(), Display()).execute()
+    assert loaded.state.trunk == "master" and loaded.state.status == "done"
+
+
+def test_standards_download_failure_fails_branch_stage(factory, target, fake_pi, monkeypatch):
+    from sf.target import StandardsError
+
+    def offline(url):
+        raise StandardsError(f"could not download {url}: offline")
+
+    monkeypatch.setattr("sf.target.download", offline)
+    fake_pi(script())
+    run, wf = start(factory, target)
+    with pytest.raises(StageFailed, match="could not download .*AGENTS.md"):
+        wf.execute()
+    assert run.state.stage == "branch" and run.state.status == "failed"

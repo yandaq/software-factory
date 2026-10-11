@@ -9,8 +9,8 @@ A Python orchestrator that drives the Pi CLI coding agent through a fixed workfl
   - Trunk is `main`.
 - **Target repo**: the software being built. It is passed with `--target <path>`.
   - Optional `<target>/.sf.toml` holds per-target settings: `trunk` (default `main`) and validation overrides.
-  - It contains `coding-standards.md`, `architecture.md`, `validation.md`, `agents.md` and `docs/`.
-- If any standards file is missing from the target, the run copies in a starter template from the factory, on the run branch.
+  - It contains `AGENTS.md` at the root; every other doc lives in `docs/`, including `docs/coding-standards.md`, `docs/architecture.md` and `docs/VALIDATION.md`.
+- If any standards file is missing from the target, the run adds it on the run branch: `AGENTS.md` and `docs/VALIDATION.md` are downloaded from https://github.com/yandaq/agents-default; `docs/coding-standards.md` and `docs/architecture.md` are copied from the factory's starter templates.
 
 ## 2. Stack
 
@@ -71,8 +71,8 @@ pi --mode json --model <model> --thinking <thinking> --tools <tools> \
 3. **Plan.** The planner produces `plan.md`. Commit. With `--approve-plan`, a human approves the plan before the run continues.
 4. **Implement ⇄ Review**, for up to **5 loops**:
    - **Implementer.** Starts a fresh session each loop, with the plan, the latest review findings and the latest validation output. It follows **no** coding standards and simply delivers the planned work. Commit.
-   - **Validation.** The orchestrator runs the commands listed in `validation.md`. If there are none, validation is skipped and the skip is logged. On failure, control returns to the implementer without running the reviewer, and this counts as a loop.
-   - **Reviewer.** Reviews the work against `coding-standards.md`. It returns `{verdict: approve|changes_requested, findings[]}`, which is written to `review-<n>.md`. Commit.
+   - **Validation.** The orchestrator runs the commands listed in `docs/VALIDATION.md`. If there are none, validation is skipped and the skip is logged. On failure, control returns to the implementer without running the reviewer, and this counts as a loop.
+   - **Reviewer.** Reviews the work against `docs/coding-standards.md`. It returns `{verdict: approve|changes_requested, findings[]}`, which is written to `review-<n>.md`. Commit.
    - **Cap reached.** If the reviewer has not approved after 5 loops, a human chooses: merge anyway, abort, or allow N more loops. This outcome is flagged to the improve phase.
 5. **Document.** The documenter diffs `trunk...branch`. It updates existing docs and may create new docs only under `docs/`. It must not touch code or the standards files. Commit.
 6. **Merge.** Local `git merge --no-ff` into the trunk. If there is a conflict, the run aborts.
@@ -80,7 +80,7 @@ pi --mode json --model <model> --thinking <thinking> --tools <tools> \
    - The improver analyses the generated code, all run logs, and the past decisions recorded in `improvements.jsonl`. Ideas that were previously rejected must not be proposed again.
    - Each idea is presented in the terminal with its title, rationale, evidence and proposed change. The human chooses **[a]pprove / [s]kip / [r]eject**, with an optional note. Every decision is recorded in `improvements.jsonl`.
    - Each approved idea is implemented by a new `improvement-implementer` Pi run.
-     - **Allowed to change:** `agents/*.md` (committed in the factory repo, with the run-id in the commit message) and the target's `coding-standards.md`, `architecture.md`, `validation.md` and `agents.md` (a follow-up commit on the target trunk).
+     - **Allowed to change:** `agents/*.md` (committed in the factory repo, with the run-id in the commit message) and the target's `AGENTS.md`, `docs/VALIDATION.md`, `docs/coding-standards.md` and `docs/architecture.md` (a follow-up commit on the target trunk).
      - **Not allowed to change:** the orchestrator code.
 
 Each stage is committed as it completes.

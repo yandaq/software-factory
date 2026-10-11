@@ -10,8 +10,11 @@ from sf.pi import Display, StageFailed, run_agent
 from sf.run import STAGES, Run, RunState
 from sf.target import (
     STANDARDS_FILES,
+    StandardsError,
+    TrunkError,
     install_missing_standards,
     load_config,
+    resolve_trunk,
     run_validation,
     validation_commands,
 )
@@ -35,17 +38,17 @@ def new_run(factory: Path, target: Path, prompt: str, approve_plan: bool) -> Run
     target = target.resolve()
     g.git(target, "rev-parse", "--git-dir")
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    config = load_config(target)
+    trunk = resolve_trunk(target, load_config(target))
     state = RunState(
         run_id=run_id,
         target=str(target),
-        trunk=config.trunk,
+        trunk=trunk,
         branch=f"sf/{run_id}",
         approve_plan=approve_plan,
     )
     run = Run(factory, state)
     (run.dir / "prompt.md").write_text(prompt.rstrip() + "\n")
-    run.log("run_created", target=str(target), trunk=config.trunk)
+    run.log("run_created", target=str(target), trunk=trunk)
     run.save()
     return run
 
@@ -116,11 +119,18 @@ class Workflow:
         target = self.run.target
         if g.git(target, "status", "--porcelain").strip():
             raise StageFailed(f"target {target} has uncommitted changes")
+        try:  # re-resolved so a resumed run picks up a fixed trunk or .sf.toml
+            self.state.trunk = resolve_trunk(target, load_config(target))
+        except TrunkError as e:
+            raise StageFailed(str(e)) from e
         if g.git(target, "branch", "--list", self.state.branch).strip():
             g.git(target, "checkout", self.state.branch)
         else:
             g.git(target, "checkout", "-b", self.state.branch, self.state.trunk)
-        copied = install_missing_standards(target, self.factory / "templates")
+        try:
+            copied = install_missing_standards(target, self.factory / "templates")
+        except StandardsError as e:
+            raise StageFailed(str(e)) from e
         if copied:
             self.run.log("standards_installed", files=copied)
             self._commit_target(f"add starter standards ({', '.join(copied)})")
@@ -135,8 +145,8 @@ class Workflow:
         out = self._agent(
             "planner",
             (
-                "Produce an implementation plan for the request below. Read architecture.md, "
-                f"agents.md and docs/ in the repository first.\n\n# Request\n\n{prompt}"
+                "Produce an implementation plan for the request below. Read AGENTS.md and "
+                f"docs/ (including docs/architecture.md) in the repository first.\n\n# Request\n\n{prompt}"
             ),
         )
         plan = out["plan"]
@@ -182,7 +192,7 @@ class Workflow:
         self.run.log("implemented", summary=out.get("summary"))
 
         if not commands:
-            self.run.log("validation_skipped", reason="no commands in validation.md")
+            self.run.log("validation_skipped", reason="no commands in docs/VALIDATION.md")
         else:
             ok = run_validation(self.run.target, commands, self.run.dir / f"validation-{n}.log")
             self.state.results[f"validation-{n}"] = "passed" if ok else "failed"
@@ -194,7 +204,7 @@ class Workflow:
         out = self._agent(
             "reviewer",
             (
-                "Review the work on this branch against coding-standards.md. "
+                "Review the work on this branch against docs/coding-standards.md. "
                 f"Inspect `git diff {self.state.trunk}...HEAD`.\n\n# Plan\n\n{plan}"
             ),
         )

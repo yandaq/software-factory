@@ -4,16 +4,49 @@ import re
 import shutil
 import subprocess
 import tomllib
+import urllib.request
 from pathlib import Path
 
 from pydantic import BaseModel
 
-STANDARDS_FILES = ("coding-standards.md", "architecture.md", "validation.md", "agents.md")
+from sf import git as g
+
+VALIDATION_FILE = "docs/VALIDATION.md"
+STANDARDS_FILES = ("AGENTS.md", VALIDATION_FILE, "docs/coding-standards.md", "docs/architecture.md")
+DEFAULTS_URL = "https://raw.githubusercontent.com/yandaq/agents-default/main"
+DOWNLOADED = {"AGENTS.md": f"{DEFAULTS_URL}/AGENTS.md", VALIDATION_FILE: f"{DEFAULTS_URL}/VALIDATION.md"}
+TEMPLATED = {"docs/coding-standards.md": "coding-standards.md", "docs/architecture.md": "architecture.md"}
 
 
 class TargetConfig(BaseModel):
-    trunk: str = "main"
-    validation: list[str] | None = None  # overrides commands parsed from validation.md
+    trunk: str | None = None  # default: main, else master
+    validation: list[str] | None = None  # overrides commands parsed from docs/VALIDATION.md
+
+
+DEFAULT_TRUNKS = ("main", "master")
+
+
+class TrunkError(Exception):
+    pass
+
+
+def resolve_trunk(target: Path, config: TargetConfig) -> str:
+    """The configured trunk, else `main`, else `master`; it must be a branch with a commit."""
+
+    def exists(branch: str) -> bool:
+        return g.git(target, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False) != ""
+
+    if config.trunk:
+        if exists(config.trunk):
+            return config.trunk
+        raise TrunkError(f"trunk '{config.trunk}' from {target / '.sf.toml'} is not a branch with a commit in {target}")
+    for branch in DEFAULT_TRUNKS:
+        if exists(branch):
+            return branch
+    raise TrunkError(
+        f"{target} has no 'main' or 'master' branch with a commit; commit to one of them "
+        'or set trunk = "<branch>" in .sf.toml'
+    )
 
 
 def load_config(target: Path) -> TargetConfig:
@@ -23,14 +56,31 @@ def load_config(target: Path) -> TargetConfig:
     return TargetConfig(**tomllib.loads(path.read_text()))
 
 
+class StandardsError(Exception):
+    pass
+
+
+def download(url: str) -> str:
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return resp.read().decode()
+    except OSError as e:
+        raise StandardsError(f"could not download {url}: {e}") from e
+
+
 def install_missing_standards(target: Path, templates: Path) -> list[str]:
-    copied = []
-    for name in STANDARDS_FILES:
-        if not (target / name).exists():
-            shutil.copyfile(templates / name, target / name)
-            copied.append(name)
+    """Add missing standards: AGENTS.md and docs/VALIDATION.md from agents-default, the rest from templates."""
     (target / "docs").mkdir(exist_ok=True)
-    return copied
+    installed = []
+    for path, url in DOWNLOADED.items():
+        if not (target / path).exists():
+            (target / path).write_text(download(url))
+            installed.append(path)
+    for path, template in TEMPLATED.items():
+        if not (target / path).exists():
+            shutil.copyfile(templates / template, target / path)
+            installed.append(path)
+    return installed
 
 
 _FENCE = re.compile(r"```(?:sh|bash|shell)\s*\n(.*?)```", re.DOTALL)
@@ -39,7 +89,7 @@ _FENCE = re.compile(r"```(?:sh|bash|shell)\s*\n(.*?)```", re.DOTALL)
 def validation_commands(target: Path, config: TargetConfig) -> list[str]:
     if config.validation is not None:
         return config.validation
-    path = target / "validation.md"
+    path = target / VALIDATION_FILE
     if not path.exists():
         return []
     commands = []

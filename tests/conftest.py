@@ -54,3 +54,16 @@ def fake_pi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def calls(script: Path) -> list[dict]:
     p = script.with_suffix(".calls.jsonl")
     return [json.loads(l) for l in p.read_text().splitlines()] if p.exists() else []
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Stub agents-default downloads; returns the URLs requested."""
+    urls: list[str] = []
+
+    def fake_download(url: str) -> str:
+        urls.append(url)
+        return f"# downloaded from {url}\n"
+
+    monkeypatch.setattr("sf.target.download", fake_download)
+    return urls
