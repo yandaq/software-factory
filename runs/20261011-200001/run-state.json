@@ -1,0 +1,28 @@
+{
+  "run_id": "20261011-200001",
+  "target": "/home/ian/hello-world",
+  "trunk": "main",
+  "branch": "sf/20261011-200001",
+  "approve_plan": true,
+  "status": "failed",
+  "stage": "branch",
+  "loop": 0,
+  "max_loops": 5,
+  "cap_reached": false,
+  "completed": [],
+  "results": {
+    "branch": "failed: git checkout -b sf/20261011-200001 main failed in /home/ian/hello-world: fatal: 'main' is not a commit and a branch 'sf/20261011-200001' cannot be created from it"
+  },
+  "invocations": [],
+  "tokens": {
+    "run": {
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "cost": 0.0
+    },
+    "by_stage": {},
+    "by_loop": {}
+  }
+}
