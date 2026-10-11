@@ -1,0 +1,4 @@
+{"ts": "2026-10-11T19:20:28.557368+00:00", "run_id": "20261011-202028", "stage": "branch", "loop": 0, "source": "sf", "type": "run_created", "target": "/home/ian/hello-world", "trunk": "master"}
+{"ts": "2026-10-11T19:20:28.561969+00:00", "run_id": "20261011-202028", "stage": "branch", "loop": 0, "source": "sf", "type": "stage_start"}
+{"ts": "2026-10-11T19:20:29.220833+00:00", "run_id": "20261011-202028", "stage": "branch", "loop": 0, "source": "sf", "type": "standards_installed", "files": ["AGENTS.md", "docs/VALIDATION.md", "docs/coding-standards.md", "docs/architecture.md"]}
+{"ts": "2026-10-11T19:20:29.267741+00:00", "run_id": "20261011-202028", "stage": "branch", "loop": 0, "source": "sf", "type": "stage_end", "result": "on sf/20261011-202028; installed AGENTS.md, docs/VALIDATION.md, docs/coding-standards.md, docs/architecture.md"}
