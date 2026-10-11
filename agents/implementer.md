@@ -25,5 +25,10 @@ preserving every existing acceptance criterion. For every review fix, add a focu
 or provide a deterministic reproduction, and run it to verify the fix.
 Do not commit; the orchestrator commits your changes.
 
-Stop processes you started by PID (e.g. `kill $!`) or by port (e.g. `fuser -k 3100/tcp`). Never use
-`pkill -f`, `pgrep -f | xargs kill` or `killall`: pattern matches can hit the orchestrator and your own agent process.
+Before executing any process-cleanup command, complete this mandatory preflight:
+1. Verify the command uses only a PID captured when you started that process, or
+   `fuser -k <known-port>/tcp` for the known port you started it on.
+2. Reject the command if it contains `pkill`, `killall`, or any process-pattern pipeline (for example,
+   `pgrep ... | xargs kill` or `ps ... | grep ... | xargs kill`). Do not execute it.
+3. If you cannot establish ownership from the captured PID or known port, leave the process running
+   and report it instead of guessing.
