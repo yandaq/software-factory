@@ -5,7 +5,7 @@
   "branch": "sf/20261011-214836",
   "approve_plan": false,
   "status": "running",
-  "stage": "prompt",
+  "stage": "plan",
   "loop": 0,
   "max_loops": 5,
   "cap_reached": false,
@@ -17,16 +17,39 @@
     "branch": "on sf/20261011-214836; installed AGENTS.md, docs/VALIDATION.md, docs/coding-standards.md, docs/architecture.md",
     "prompt": "prompt saved"
   },
-  "invocations": [],
+  "invocations": [
+    {
+      "agent": "planner",
+      "stage": "plan",
+      "loop": 0,
+      "n": 1,
+      "ok": true,
+      "usage": {
+        "input": 10,
+        "output": 6730,
+        "cache_read": 21973,
+        "cache_write": 12476,
+        "cost": 0.20141460000000003
+      }
+    }
+  ],
   "tokens": {
     "run": {
-      "input": 0,
-      "output": 0,
-      "cache_read": 0,
-      "cache_write": 0,
-      "cost": 0.0
+      "input": 10,
+      "output": 6730,
+      "cache_read": 21973,
+      "cache_write": 12476,
+      "cost": 0.20141460000000003
     },
-    "by_stage": {},
+    "by_stage": {
+      "plan": {
+        "input": 10,
+        "output": 6730,
+        "cache_read": 21973,
+        "cache_write": 12476,
+        "cost": 0.20141460000000003
+      }
+    },
     "by_loop": {}
   }
 }
