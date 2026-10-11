@@ -1,8 +1,8 @@
 ---
 name: reviewer
 purpose: Review implementation against coding standards
-model: anthropic/claude-opus-5-5
-thinking: high
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, grep, find, ls]
 contract:
   type: object

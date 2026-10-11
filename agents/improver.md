@@ -1,8 +1,8 @@
 ---
 name: improver
 purpose: Propose improvements to agent definitions and target standards from run evidence
-model: anthropic/claude-opus-5-5
-thinking: high
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, grep, find, ls]
 contract:
   type: object

@@ -1,8 +1,8 @@
 ---
 name: improvement-implementer
 purpose: Apply one approved improvement
-model: anthropic/claude-sonnet-5-5
-thinking: medium
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, edit, write, grep, find, ls]
 contract:
   type: object
