@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sf runs</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e3de;
+  --accent: #2f5bd3; --ok: #1f8a4c; --warn: #b7791f; --bad: #c53030; --chip: #efefea;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --panel: #1e1e1c; --text: #ececea; --muted: #9a9a94; --line: #33332f;
+          --accent: #7fa0ff; --ok: #4cc382; --warn: #e0a84a; --bad: #f07070; --chip: #2a2a27; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+.layout { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
+aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+aside h1 { font-size: 15px; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.run { padding: 10px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.run:hover, .run.sel { background: var(--chip); }
+.run .id { font-family: var(--mono); font-size: 13px; }
+.run .meta { color: var(--muted); font-size: 12px; }
+main { padding: 20px; min-width: 0; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+.status { font-weight: 600; }
+.s-running { color: var(--accent); } .s-done { color: var(--ok); }
+.s-failed, .s-unreadable { color: var(--bad); } .s-aborted { color: var(--warn); }
+.stages { display: flex; flex-wrap: wrap; gap: 6px; }
+.stage { padding: 4px 10px; border-radius: 999px; background: var(--chip); font-size: 12px; }
+.stage.done { background: var(--ok); color: #fff; }
+.stage.current { outline: 2px solid var(--accent); }
+.stage.current.failed { outline-color: var(--bad); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid section { margin-bottom: 0; }
+.log { font-family: var(--mono); font-size: 12px; max-height: 340px; overflow: auto; }
+.log div { padding: 2px 0; border-bottom: 1px dashed var(--line); word-break: break-word; }
+.muted { color: var(--muted); }
+a.art { color: var(--accent); cursor: pointer; margin-right: 12px; display: inline-block; font-family: var(--mono); font-size: 12px; }
+pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; background: var(--chip); padding: 12px; border-radius: 6px; max-height: 480px; overflow: auto; margin: 10px 0 0; }
+.err { color: var(--bad); }
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { border-right: 0; max-height: 40vh; }
+  main { padding: 16px; }
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside><h1>Software factory runs</h1><div id="runs"></div></aside>
+  <main id="main"><p class="muted">Select a run.</p></main>
+</div>
+<script>
+const STAGES = ["branch", "prompt", "plan", "implement", "document", "merge", "improve"];
+let selected = location.hash.slice(1) || null;
+let openArtefact = null;
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const money = c => "$" + (c || 0).toFixed(4);
+const time = ts => ts ? new Date(ts).toLocaleTimeString() : "";
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  return r.json();
+}
+
+async function refreshRuns() {
+  const runs = await getJSON("/api/runs");
+  if (!selected && runs.length) selected = runs[0].run_id;
+  document.getElementById("runs").innerHTML = runs.map(r => `
+    <div class="run ${r.run_id === selected ? "sel" : ""}" data-id="${esc(r.run_id)}">
+      <div class="id">${esc(r.run_id)}</div>
+      <div class="meta"><span class="status s-${esc(r.status)}">${esc(r.status)}</span>
+        · ${esc(r.stage)}${r.loop ? " #" + r.loop : ""} · ${money(r.cost)}</div>
+    </div>`).join("") || `<p class="muted" style="padding:16px">No runs yet.</p>`;
+}
+
+function tokenRows(tokens) {
+  const rows = [
+    ...Object.entries(tokens.by_stage || {}).map(([k, v]) => ["stage " + k, v]),
+    ...Object.entries(tokens.by_loop || {}).map(([k, v]) => ["loop " + k, v]),
+    ["run", tokens.run || {}],
+  ];
+  return rows.map(([name, u]) => `<tr><td>${esc(name)}</td><td class="n">${u.input || 0}</td>
+    <td class="n">${u.output || 0}</td><td class="n">${u.cache_read || 0}</td>
+    <td class="n">${u.cache_write || 0}</td><td class="n">${money(u.cost)}</td></tr>`).join("");
+}
+
+function loopRows(state) {
+  const loops = [];
+  for (let n = 1; n <= state.loop; n++) {
+    loops.push(`<tr><td>${n}</td><td>${esc(state.results["validation-" + n] || "—")}</td>
+      <td>${esc(state.results["review-" + n] || "—")}</td></tr>`);
+  }
+  return loops.join("") || `<tr><td colspan="3" class="muted">No loops yet.</td></tr>`;
+}
+
+function eventLine(e) {
+  const {ts, run_id, stage, loop, source, type, ...rest} = e;
+  const detail = Object.keys(rest).length ? " " + esc(JSON.stringify(rest)) : "";
+  const cls = /fail|violation|invalid|abort/.test(type) || rest.failure ? "err" : "";
+  return `<div class="${cls}"><span class="muted">${time(ts)} ${esc(stage)}#${loop}</span> <b>${esc(type)}</b>${detail}</div>`;
+}
+
+function toolLine(e) {
+  const ev = e.event;
+  return `<div><span class="muted">${time(e.ts)} ${esc(e.stage)}#${e.loop} ${esc(e.agent)}</span>
+    <b>${esc(ev.toolName)}</b> ${esc(JSON.stringify(ev.args).slice(0, 160))}</div>`;
+}
+
+async function refreshDetail() {
+  const main = document.getElementById("main");
+  if (!selected) return;
+  const d = await getJSON("/api/runs/" + encodeURIComponent(selected));
+  const s = d.state;
+  const stages = STAGES.map(st => {
+    const cls = s.completed.includes(st) ? "done" : st === s.stage ? `current ${s.status}` : "";
+    return `<span class="stage ${cls}" title="${esc(s.results[st] || "")}">${st}</span>`;
+  }).join("");
+  const results = STAGES.filter(st => s.results[st])
+    .map(st => `<tr><td>${st}</td><td>${esc(s.results[st])}</td></tr>`).join("");
+  main.innerHTML = `
+    <section>
+      <h2>Run ${esc(s.run_id)}</h2>
+      <p><span class="status s-${esc(s.status)}">${esc(s.status)}</span> · stage <b>${esc(s.stage)}</b>
+        · loop ${s.loop}/${s.max_loops}${s.cap_reached ? ' · <span class="err">loop cap reached</span>' : ""}</p>
+      <p class="muted">${esc(s.target)} · ${esc(s.branch)} → ${esc(s.trunk)}</p>
+      <div class="stages">${stages}</div>
+    </section>
+    <div class="grid">
+      <section><h2>Stage results</h2><table>${results || '<tr><td class="muted">None yet.</td></tr>'}</table></section>
+      <section><h2>Loops</h2><table><tr><th>#</th><th>Validation</th><th>Review</th></tr>${loopRows(s)}</table></section>
+    </div>
+    <section style="margin-top:16px"><h2>Tokens</h2><div style="overflow-x:auto"><table>
+      <tr><th>Scope</th><th class="n">Input</th><th class="n">Output</th><th class="n">Cache read</th>
+      <th class="n">Cache write</th><th class="n">Cost</th></tr>${tokenRows(s.tokens || {})}</table></div></section>
+    <section><h2>Artefacts</h2>${d.artefacts.map(a => `<a class="art" data-name="${esc(a)}">${esc(a)}</a>`).join("")}
+      <pre id="art" ${openArtefact ? "" : "hidden"}></pre></section>
+    <div class="grid">
+      <section><h2>Orchestrator events</h2><div class="log" id="ev">${d.events.slice().reverse().map(eventLine).join("")}</div></section>
+      <section><h2>Tool calls</h2><div class="log">${d.tools.slice().reverse().map(toolLine).join("")}</div></section>
+    </div>`;
+  if (openArtefact) showArtefact(openArtefact);
+}
+
+async function showArtefact(name) {
+  openArtefact = name;
+  const r = await fetch(`/api/runs/${encodeURIComponent(selected)}/${encodeURIComponent(name)}`);
+  const pre = document.getElementById("art");
+  pre.hidden = false;
+  pre.textContent = r.ok ? await r.text() : `Could not load ${name}: HTTP ${r.status}`;
+}
+
+document.addEventListener("click", e => {
+  const run = e.target.closest(".run");
+  if (run) { selected = run.dataset.id; openArtefact = null; location.hash = selected; tick(); }
+  const art = e.target.closest(".art");
+  if (art && art.dataset.name === openArtefact) {
+    openArtefact = null;
+    document.getElementById("art").hidden = true;
+  } else if (art) {
+    showArtefact(art.dataset.name).catch(err => console.error(err));
+  }
+});
+
+async function tick() {
+  try { await refreshRuns(); await refreshDetail(); }
+  catch (err) { console.error(err); document.getElementById("main").insertAdjacentHTML("afterbegin",
+    `<p class="err">Refresh failed: ${esc(err.message)}</p>`); }
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
