@@ -3479,3 +3479,5 @@
 {"ts": "2026-10-11T20:55:29.745285+00:00", "run_id": "20261011-214836", "stage": "implement", "loop": 1, "source": "pi", "agent": "reviewer", "invocation": 2, "event": {"type": "agent_settled", "aborted": false}}
 {"ts": "2026-10-11T20:55:29.807525+00:00", "run_id": "20261011-214836", "stage": "implement", "loop": 1, "source": "sf", "type": "pi_end", "agent": "reviewer", "invocation": 2, "returncode": 0, "stop_reason": "stop", "aborted": false, "failure": null}
 {"ts": "2026-10-11T20:55:29.835225+00:00", "run_id": "20261011-214836", "stage": "implement", "loop": 1, "source": "sf", "type": "git_commit", "repo": "factory", "message": "sf 20261011-214836: implement \u2014 loop 1 review approve"}
+{"ts": "2026-10-11T20:55:33.849580+00:00", "run_id": "20261011-214836", "stage": "implement", "loop": 1, "source": "sf", "type": "stage_end", "result": "approved in loop 1"}
+{"ts": "2026-10-11T20:55:33.862536+00:00", "run_id": "20261011-214836", "stage": "implement", "loop": 1, "source": "sf", "type": "git_commit", "repo": "factory", "message": "sf 20261011-214836: implement \u2014 approved in loop 1"}

@@ -12,13 +12,15 @@
   "completed": [
     "branch",
     "prompt",
-    "plan"
+    "plan",
+    "implement"
   ],
   "results": {
     "branch": "on sf/20261011-214836; installed AGENTS.md, docs/VALIDATION.md, docs/coding-standards.md, docs/architecture.md",
     "prompt": "prompt saved",
     "plan": "plan written",
-    "review-1": "approve"
+    "review-1": "approve",
+    "implement": "approved in loop 1"
   },
   "invocations": [
     {
