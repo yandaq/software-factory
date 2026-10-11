@@ -1,8 +1,8 @@
 ---
 name: planner
 purpose: Turn a request into an implementation plan for the target repository
-model: halogen/halogen-qwen3.8-flash-next
-thinking: xhigh
+model: openai-codex/gpt-5.6-sol
+thinking: medium
 tools: [read, grep, find, ls]
 contract:
   type: object

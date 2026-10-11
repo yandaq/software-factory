@@ -1,8 +1,8 @@
 ---
 name: improvement-implementer
 purpose: Apply one approved improvement
-model: halogen/halogen-qwen3.8-flash-next
-thinking: xhigh
+model: openai-codex/gpt-5.6-sol
+thinking: medium
 tools: [read, edit, write, grep, find, ls]
 contract:
   type: object

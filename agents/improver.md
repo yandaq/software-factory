@@ -1,8 +1,8 @@
 ---
 name: improver
 purpose: Propose improvements to agent definitions and target standards from run evidence
-model: halogen/halogen-qwen3.8-flash-next
-thinking: xhigh
+model: openai-codex/gpt-5.6-sol
+thinking: medium
 tools: [read, grep, find, ls]
 contract:
   type: object

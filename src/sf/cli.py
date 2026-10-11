@@ -85,10 +85,10 @@ def dashboard(
     host: Annotated[str, typer.Option(help="Bind address")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port")] = 8765,
 ) -> None:
-    """Serve a read-only web dashboard of all runs."""
+    """Serve a web dashboard of all runs, with a page to configure agent models and thinking levels."""
     from sf.dashboard import serve
 
-    server = serve(_factory() / "runs", host, port)
+    server = serve(_factory() / "runs", host, port, _factory() / "agents")
     typer.echo(f"sf dashboard on http://{host}:{port} (Ctrl+C to stop)")
     try:
         server.serve_forever()

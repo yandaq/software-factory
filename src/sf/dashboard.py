@@ -1,10 +1,20 @@
-"""Read-only local web dashboard over `runs/*/` (stdlib HTTP server, polled JSON API)."""
+"""Local web dashboard over `runs/*/` (stdlib HTTP server, polled JSON API).
+
+Runs are read-only; the config page edits only the `model` and `thinking` frontmatter of `agents/*.md`.
+"""
 
 import json
+import re
+import subprocess
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
+
+import yaml
+
+from sf.agents import AGENT_NAMES, Thinking, load_agent, parse_agent
+from sf.pi import pi_bin
 
 STATIC = Path(__file__).parent / "static"
 ARTEFACT_PREFIXES = ("prompt.md", "plan.md", "review-", "validation-", "pi-")
@@ -82,12 +92,61 @@ def _run_dir(runs_dir: Path, run_id: str) -> Path | None:
     return run_dir
 
 
-def make_handler(runs_dir: Path) -> type[BaseHTTPRequestHandler]:
+def agent_config(agents_dir: Path) -> dict[str, Any]:
+    agents = []
+    for name in AGENT_NAMES:
+        a = load_agent(agents_dir, name)
+        agents.append({"name": name, "purpose": a.purpose, "model": a.model, "thinking": a.thinking})
+    models, error = list_models()
+    return {"agents": agents, "thinking_levels": list(get_args(Thinking)), "models": models, "models_error": error}
+
+
+def list_models() -> tuple[list[str], str | None]:
+    """`provider/model` ids from `pi --list-models`, for the model picker's suggestions."""
+    try:
+        out = subprocess.run([pi_bin(), "--list-models"], capture_output=True, text=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        return [], f"pi --list-models failed: {e}"
+    rows = [line.split() for line in out.stdout.splitlines()[1:]]
+    return [f"{r[0]}/{r[1]}" for r in rows if len(r) >= 2], None
+
+
+def set_agent_config(agents_dir: Path, name: str, model: str, thinking: str) -> str | None:
+    """Rewrite one agent's `model`/`thinking` frontmatter lines in place; return an error message or None."""
+    if name not in AGENT_NAMES:
+        return f"unknown agent {name!r}"
+    model = model.strip()
+    if not model or "\n" in model:
+        return "model must be a single non-empty line"
+    if thinking not in get_args(Thinking):
+        return f"thinking must be one of {', '.join(get_args(Thinking))}"
+    path = agents_dir / f"{name}.md"
+    _, front, body = path.read_text().split("---", 2)
+    for key, value in (("model", model), ("thinking", thinking)):
+        front, n = re.subn(rf"^{key}:.*$", f"{key}: {value}", front, count=1, flags=re.MULTILINE)
+        if n != 1:
+            return f"{path}: no '{key}:' line in frontmatter"
+    text = f"---{front}---{body}"
+    try:
+        parsed = parse_agent(text)  # never write a definition the factory could not load
+    except (ValueError, yaml.YAMLError) as e:
+        return f"invalid definition: {e}"
+    if (parsed.model, parsed.thinking) != (model, thinking):
+        return f"model {model!r} does not survive YAML parsing unquoted"
+    path.write_text(text)
+    return None
+
+
+def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parts = [p for p in self.path.split("?")[0].split("/") if p]
             if not parts:
                 return self._send((STATIC / "dashboard.html").read_bytes(), "text/html; charset=utf-8")
+            if parts == ["config"]:
+                return self._send((STATIC / "config.html").read_bytes(), "text/html; charset=utf-8")
+            if parts == ["api", "config"]:
+                return self._json(agent_config(agents_dir))
             if parts == ["api", "runs"]:
                 return self._json(list_runs(runs_dir))
             if len(parts) == 3 and parts[:2] == ["api", "runs"]:
@@ -98,20 +157,35 @@ def make_handler(runs_dir: Path) -> type[BaseHTTPRequestHandler]:
                     return self._send(text.encode(), "text/plain; charset=utf-8")
             self.send_error(HTTPStatus.NOT_FOUND)
 
+        def do_PUT(self) -> None:
+            parts = [p for p in self.path.split("?")[0].split("/") if p]
+            if len(parts) != 3 or parts[:2] != ["api", "config"]:
+                return self.send_error(HTTPStatus.NOT_FOUND)
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                error = set_agent_config(agents_dir, parts[2], str(body["model"]), str(body["thinking"]))
+            except (ValueError, KeyError, TypeError) as e:
+                error = f"bad request: {e}"
+            self._send(
+                json.dumps({"error": error}).encode(),
+                "application/json",
+                HTTPStatus.BAD_REQUEST if error else HTTPStatus.OK,
+            )
+
         def _json(self, data: Any) -> None:
             if data is None:
                 return self.send_error(HTTPStatus.NOT_FOUND)
             self._send(json.dumps(data).encode(), "application/json")
 
-        def _send(self, body: bytes, content_type: str) -> None:
-            self.send_response(HTTPStatus.OK)
+        def _send(self, body: bytes, content_type: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+            self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             try:
                 self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):
+            except BrokenPipeError, ConnectionResetError:
                 pass  # the browser navigated away or reloaded mid-response; nothing to deliver
 
         def log_message(self, format: str, *args: Any) -> None:
@@ -120,5 +194,5 @@ def make_handler(runs_dir: Path) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(runs_dir: Path, host: str, port: int) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(runs_dir))
+def serve(runs_dir: Path, host: str, port: int, agents_dir: Path | None = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(runs_dir, agents_dir or runs_dir.parent / "agents"))

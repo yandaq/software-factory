@@ -17,6 +17,8 @@ uv run sf dashboard [--port 8765]                            # web dashboard at 
 
 The dashboard is read-only and refreshes every 2 s: every run's status, the stage pipeline, review/validation
 results per loop, token usage, artefacts (plan, reviews, validation logs, stderr), orchestrator events and tool calls.
+Runs are read-only; the **config** page (`/config`) sets each agent's model and thinking level by rewriting those two
+frontmatter lines in `agents/<name>.md` (model suggestions come from `pi --list-models`).
 
 Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, loop cap abort, merge conflict).
 

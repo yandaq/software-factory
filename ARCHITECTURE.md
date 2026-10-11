@@ -10,7 +10,7 @@
 | `agents.py` | Agent definition parsing/validation |
 | `target.py` | `.sf.toml`, starter standards, validation commands |
 | `git.py` | git wrapper |
-| `dashboard.py` + `static/dashboard.html` | Read-only stdlib HTTP server and polling page over `runs/*/`; no state of its own |
+| `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/` (read-only); config page edits only `model`/`thinking` frontmatter in `agents/*.md` |
 | `console.py` | Rich live display and terminal prompts (`TerminalHuman`) |
 
 `Workflow` depends on a `Human` and a display protocol, so tests substitute scripted fakes.

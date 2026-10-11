@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sf config</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e3de;
+  --accent: #2f5bd3; --ok: #1f8a4c; --bad: #c53030; --chip: #efefea;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #151514; --panel: #1e1e1c; --text: #ececea; --muted: #9a9a94; --line: #33332f;
+          --accent: #7fa0ff; --ok: #4cc382; --bad: #f07070; --chip: #2a2a27; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+main { max-width: 960px; margin: 0 auto; padding: 20px 16px; }
+header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; }
+header h1 { font-size: 18px; margin: 0; }
+a { color: var(--accent); }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.name { font-family: var(--mono); font-weight: 600; }
+.purpose { color: var(--muted); font-size: 12px; }
+input, select, button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 8px; }
+select.model { width: 100%; font-family: var(--mono); font-size: 13px; }
+button { cursor: pointer; background: var(--accent); color: #fff; border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+.msg { font-size: 12px; }
+.ok { color: var(--ok); } .err { color: var(--bad); } .muted { color: var(--muted); }
+@media (max-width: 640px) {
+  tr { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+  tr:first-child { display: none; }
+  td { border: 0; padding: 4px 0; }
+  td:first-child, td:nth-child(2) { grid-column: 1 / -1; }
+  tbody tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Agent config</h1><a href="/">← runs</a></header>
+  <p class="muted">Edits the <code>model</code> and <code>thinking</code> frontmatter in <code>agents/&lt;name&gt;.md</code>.
+    Changes apply to the next agent invocation.</p>
+  <p id="status"></p>
+  <section><table id="agents"></table></section>
+</main>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+async function load() {
+  const r = await fetch("/api/config");
+  if (!r.ok) throw new Error(`/api/config: HTTP ${r.status}`);
+  const cfg = await r.json();
+  const byProvider = {};
+  for (const m of cfg.models) (byProvider[m.split("/")[0]] ??= []).push(m);
+  // Always offer the agent's current model, even if pi doesn't list it.
+  const modelOptions = current => {
+    const extra = cfg.models.includes(current) ? "" :
+      `<optgroup label="current (not listed by pi)"><option selected>${esc(current)}</option></optgroup>`;
+    return extra + Object.entries(byProvider).map(([p, ms]) => `<optgroup label="${esc(p)}">${ms.map(m =>
+      `<option ${m === current ? "selected" : ""}>${esc(m)}</option>`).join("")}</optgroup>`).join("");
+  };
+  if (cfg.models_error) document.getElementById("status").innerHTML =
+    `<span class="err">Model suggestions unavailable: ${esc(cfg.models_error)}</span>`;
+  const levels = cfg.thinking_levels;
+  document.getElementById("agents").innerHTML = `<tr><th>Agent</th><th>Model</th><th>Thinking</th><th></th></tr>` +
+    cfg.agents.map(a => `<tr data-name="${esc(a.name)}" data-model="${esc(a.model)}" data-thinking="${esc(a.thinking)}">
+      <td><div class="name">${esc(a.name)}</div><div class="purpose">${esc(a.purpose)}</div></td>
+      <td><select class="model" aria-label="${esc(a.name)} model">${modelOptions(a.model)}</select></td>
+      <td><select class="thinking" aria-label="${esc(a.name)} thinking">${levels.map(l =>
+        `<option ${l === a.thinking ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></td>
+      <td><button class="save" disabled>Save</button><div class="msg"></div></td></tr>`).join("");
+}
+
+function dirty(row) {
+  return row.querySelector(".model").value !== row.dataset.model
+    || row.querySelector(".thinking").value !== row.dataset.thinking;
+}
+
+document.addEventListener("change", e => {
+  const row = e.target.closest("tr[data-name]");
+  if (row) { row.querySelector(".save").disabled = !dirty(row); row.querySelector(".msg").textContent = ""; }
+});
+
+document.addEventListener("click", async e => {
+  if (!e.target.matches(".save")) return;
+  const row = e.target.closest("tr"), msg = row.querySelector(".msg");
+  const model = row.querySelector(".model").value, thinking = row.querySelector(".thinking").value;
+  e.target.disabled = true;
+  const r = await fetch("/api/config/" + encodeURIComponent(row.dataset.name), {
+    method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({model, thinking}),
+  });
+  if (r.ok) {
+    Object.assign(row.dataset, {model, thinking});
+    msg.className = "msg ok"; msg.textContent = "Saved";
+  } else {
+    const detail = (await r.json().catch(() => ({}))).error || `HTTP ${r.status}`;
+    console.error("save failed", row.dataset.name, r.status, detail);
+    msg.className = "msg err"; msg.textContent = detail;
+    e.target.disabled = false;
+  }
+});
+
+load().catch(err => { console.error(err);
+  document.getElementById("status").innerHTML = `<span class="err">${esc(err.message)}</span>`; });
+</script>
+</body>
+</html>

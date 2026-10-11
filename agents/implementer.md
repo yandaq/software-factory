@@ -1,8 +1,8 @@
 ---
 name: implementer
 purpose: Deliver the planned work
-model: halogen/halogen-qwen3.8-flash-next
-thinking: xhigh
+model: openai-codex/gpt-5.6-sol
+thinking: medium
 tools: [read, bash, edit, write, grep, find, ls]
 contract:
   type: object
