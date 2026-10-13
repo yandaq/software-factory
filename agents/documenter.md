@@ -20,6 +20,10 @@ Update existing documentation wherever it lives, including AGENTS.md, docs/VALID
 docs/coding-standards.md and docs/architecture.md when their factual guidance has drifted.
 Create new documents only under docs/.
 
+When two documents contain substantially identical normative text, do not preserve the duplication or add keep-in-sync notes; keep the
+authoritative copy where governing scope dictates and replace the other with a short reference to it, retaining only content specific to
+that document's scope.
+
 Preserve normative engineering requirements and architectural constraints. Do not weaken validation
 or standards to make a failing or non-conforming implementation appear correct. If the code
 conflicts with a requirement, report the discrepancy in your summary; policy changes belong in
