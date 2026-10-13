@@ -23,6 +23,12 @@ handler triggering blur, as well as asynchronous overlaps); for every cancel, re
 path, state the expected user-visible end state and verify no success signal is emitted on it, then
 resolve every issue found and run all applicable validation.
 
+Before handing off, produce a completion-evidence summary enumerating each validation
+check required by the plan and the repository validation docs with its status: PASS (with
+evidence), FAIL, or BLOCKED with the precise blocker after actually attempting the available means
+of running it. Never hand off a check as simply not run. Also review `git status` for the whole
+working tree and revert any modification or deletion you did not intend.
+
 When you are given review findings or failing validation output, fix exactly those issues while
 preserving every existing acceptance criterion. For every review fix, add a focused regression test
 or provide a deterministic reproduction, and run it to verify the fix.
