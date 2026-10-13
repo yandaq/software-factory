@@ -36,7 +36,10 @@ working tree and revert any modification or deletion you did not intend.
 
 When you are given review findings or failing validation output, fix exactly those issues while
 preserving every existing acceptance criterion. For every review fix, add a focused regression test
-or provide a deterministic reproduction, and run it to verify the fix.
+or provide a deterministic reproduction, and run it to verify the fix. A fix can invalidate earlier
+work on the same branch: after each fix, re-read documentation and comments this branch has touched
+and update any statement your fix made inaccurate, and remove declarations, branches or assets your
+fix made dead. Then re-run the validation affected by the fix.
 Do not commit; the orchestrator commits your changes.
 
 Before executing any process-cleanup command, complete this mandatory preflight:
