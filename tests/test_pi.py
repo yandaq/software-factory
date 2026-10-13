@@ -16,7 +16,7 @@ def run(tmp_path):
 
 
 def planner():
-    return load_agent(ROOT / "agents", "planner")
+    return load_agent(ROOT / "agents", "planner").model_copy(update={"harness": "pi"})
 
 
 def test_success_returns_contract_and_tracks_usage(run, fake_pi, tmp_path):

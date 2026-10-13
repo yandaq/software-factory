@@ -30,6 +30,13 @@ def factory(tmp_path: Path) -> Path:
     shutil.copytree(ROOT / "agents", f / "agents")
     shutil.copytree(ROOT / "templates", f / "templates")
     shutil.copy(ROOT / ".gitignore", f / ".gitignore")
+    # Workflow fixtures use fake Pi unless a test explicitly selects a native harness.
+    from sf.agents import AGENT_NAMES, load_agent
+    from sf.dashboard import set_agent_config
+
+    for name in AGENT_NAMES:
+        agent = load_agent(f / "agents", name)
+        assert set_agent_config(f / "agents", name, agent.model, agent.thinking, "pi") is None
     init_repo(f)
     return f
 
@@ -68,3 +75,17 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr("sf.target.download", fake_download)
     return urls
+
+
+@pytest.fixture
+def fake_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    script = tmp_path / "native-script.json"
+    for variable in ("SF_CLAUDE", "SF_CODEX"):
+        monkeypatch.setenv(variable, str(ROOT / "tests" / "fake_harness.py"))
+    monkeypatch.setenv("FAKE_HARNESS_SCRIPT", str(script))
+
+    def configure(steps: dict) -> Path:
+        script.write_text(json.dumps(steps))
+        return script
+
+    return configure

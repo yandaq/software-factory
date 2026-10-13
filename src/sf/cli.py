@@ -7,8 +7,8 @@ import typer
 
 from sf.console import LiveDisplay, TerminalHuman
 from sf.git import GitError
-from sf.pi import StageFailed
 from sf.run import Run, RunLock
+from sf.runner import StageFailed
 from sf.target import TrunkError
 from sf.workflow import Aborted, Workflow, new_run
 
@@ -85,7 +85,7 @@ def dashboard(
     host: Annotated[str, typer.Option(help="Bind address")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port")] = 8765,
 ) -> None:
-    """Serve a web dashboard of all runs, with a page to configure agent models and thinking levels."""
+    """Serve a web dashboard with agent harness, model and thinking configuration."""
     from sf.dashboard import serve
 
     server = serve(_factory() / "runs", host, port, _factory() / "agents")

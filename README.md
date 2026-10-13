@@ -1,6 +1,6 @@
 # sf — software factory
 
-Drives the [Pi](https://pi.dev) coding agent through a fixed workflow
+Drives [Pi](https://pi.dev), Claude Code, or Codex through a fixed workflow
 (prompt → plan → implement ⇄ review → document → merge → improve). Spec: [docs/spec.md](docs/spec.md).
 
 ## Usage
@@ -17,8 +17,40 @@ uv run sf dashboard [--port 8765]                            # web dashboard at 
 
 The dashboard is read-only and refreshes every 2 s: every run's status, the stage pipeline, review/validation
 results per loop, token usage, artefacts (plan, reviews, validation logs, stderr), orchestrator events and tool calls.
-Runs are read-only; the **config** page (`/config`) sets each agent's model and thinking level by rewriting those two
-frontmatter lines in `agents/<name>.md` (model suggestions come from `pi --list-models`).
+The **config** page (`/config`) sets each agent's harness, model and thinking level by updating only those
+frontmatter fields in `agents/<name>.md`. Changes apply to the next invocation; contract-correction retries
+keep the original settings. Pi remains the default when `harness` is absent, including for existing definitions.
+Model dropdowns are populated from each installed harness: `pi --list-models`, Claude Code
+initialization, and Codex app-server `model/list`. Existing unlisted models are preserved; discovery
+failures show a diagnostic and allow manual entry for native harnesses. Switching harness clears the model field to avoid accidentally passing a Pi model ID to another CLI.
+
+For example, a Codex agent's frontmatter can include:
+
+```yaml
+harness: codex                  # pi | claude-code | codex
+model: gpt-6.1-sol              # a native model ID available to your account
+thinking: high
+```
+
+Install and authenticate each selected CLI separately; the factory reuses its existing authentication.
+The new harnesses offer `low`, `medium`, `high`, and `xhigh` effort; the selected model must support the
+chosen level. Unsupported models/settings fail the stage with native stderr available in the dashboard.
+The adapters have been smoke-tested with Claude Code 2.1.296 and Codex CLI 0.162.1.
+
+All harnesses use the same workflow, JSON contracts and two same-session correction retries. Claude Code
+maps the existing agent tool lists to native tools. Codex uses a read-only sandbox for planner/reviewer/improver/improvement-reviewer
+and workspace-write for editing roles; its shell is broader than Pi's exact tool list, including for the
+improvement-implementer. Existing file-scope checks remain in place. Permission prompts are disabled for
+new harnesses, and no sandbox/permission bypass is enabled. Operations blocked by native permissions
+fail visibly rather than waiting for an unattended prompt.
+
+Dashboard status, stages, review/validation results, activity, tool calls and diagnostics remain available
+across harnesses, including mixed-harness runs. Token and cost fields are shown only when reported:
+unavailable metrics display **N/A**, mixed/incomplete totals are labelled **partial**, and estimated costs
+are labelled **est.** Codex's exec stream does not report dollar cost, cache-write tokens, or Pi-equivalent
+per-message context size; Claude Code context size is also left unavailable. Consumption totals are not
+plotted as context size. Historical Pi runs remain readable. Native stdout JSONL and stderr are downloadable
+from the dashboard; Claude Code and Codex keep resumable sessions in their own native storage.
 
 Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, loop cap abort, merge conflict).
 
@@ -26,10 +58,11 @@ Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, 
 
 | Path | Purpose |
 |---|---|
-| `agents/<name>.md` | Agent definitions: YAML frontmatter (model, thinking, tools, JSON Schema contract) + system prompt |
+| `agents/<name>.user.md` | Editable task templates with fixed context placeholders; see [agents/README.md](agents/README.md) |
+| `agents/<name>.md` | Agent definitions: YAML frontmatter (harness, model, thinking, tools, JSON Schema contract) + role prompt |
 | `templates/` | Starter `docs/coding-standards.md` and `docs/architecture.md` for targets that lack them (`AGENTS.md` and `docs/VALIDATION.md` are downloaded from [agents-default](https://github.com/yandaq/agents-default)) |
-| `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `pi-<stage>-<n>.stderr`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log` |
-| `improvements.jsonl` | Every improve-phase decision; rejected titles are never re-proposed |
+| `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `<harness>-<stage>-<n>.stderr` / `.jsonl`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log` |
+| `improvements.jsonl` | Automatic improvement selections and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes. Decisions record intent, not confirmed application. |
 | `src/sf/` | Orchestrator (see [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ## Target configuration
@@ -46,8 +79,42 @@ Without an override, validation runs every line of the ```` ```sh ```` blocks in
 ## Development
 
 ```sh
-uv run pytest -q        # uses tests/fake_pi.py via SF_PI; no API calls
+uv run pytest -q        # uses fake Pi/Claude Code/Codex executables; no API calls
 uv run ruff check src tests
 ```
 
-`SF_PI` overrides the Pi binary path.
+`SF_PI`, `SF_CLAUDE`, and `SF_CODEX` override the corresponding CLI binary paths.
+
+Agent tuning covers both persistent role instructions and task wording. The dashboard
+provides separate Markdown links for each. The improver can propose evidence-backed
+changes to either layer; suggestions are applied automatically and validated before committing. Missing or
+invalid task templates fail visibly. Structural validation checks rendering, while
+the improver selects evidence-backed changes and the portability reviewer checks shared edits.
+
+Every workflow agent receives an automatically discovered target-documentation inventory,
+including files such as DESIGN.md and component-local AGENTS.md. Discovery includes existing
+tracked and non-ignored untracked Markdown anywhere in the repository, with case-insensitive
+extensions; deleted files and symlinks are excluded. Agents read the applicable documents,
+while rendered task artifacts preserve the supplied paths. Automatically selected improvements may update
+any existing discovered document, using an allowlist frozen before that invocation. New target
+docs remain the documenter's responsibility under docs/. Validation commands still come from
+.sf.toml overrides or docs/VALIDATION.md.
+
+Shared prompt improvements must generalise beyond the current target. After structural validation,
+a read-only `improvement-reviewer` checks actual shared edits for assumptions about target-only
+components, paths, architecture or environments. Only explicit approval with no findings permits
+commits. Its pre-improvement instructions are pinned so edits to the gate cannot weaken their own
+review. Rejection or review failure restores prompts and stops the improve stage; target docs remain
+uncommitted. Target-only improvements skip the gate. Review inputs/results and failure diagnostics
+are recorded in run artifacts and events. Improvement selection requires no human input; new
+selections are recorded as `decision: automatic`, and historical decisions remain readable. This is an
+agent judgement enforced by the commit gate, not a deterministic guarantee of semantic portability.
+
+The run dashboard's **Project documents** panel lists current Markdown files from the selected
+run's target, below the activity chart. Click a document button to review and edit it in the popup
+file editor. Save writes the project file without committing; Cancel leaves it unchanged. If the
+file changed since opening, the editor keeps your draft and asks you to reopen before saving.
+Dashboard refreshes preserve open drafts. Unavailable targets report an error in the panel.
+The document popup also offers **Delete file**, with confirmation and stale-file checks. Deletion
+removes the project file without committing. Agent config popups have no delete action, and the
+factory agents directory is protected even when a run targets the factory itself.

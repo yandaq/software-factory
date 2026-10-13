@@ -1,7 +1,7 @@
 [project]
 name = "sf"
 version = "0.1.0"
-description = "Software factory orchestrator driving the Pi coding agent"
+description = "Software factory orchestrator driving Pi, Claude Code, or Codex"
 authors = [
     { name = "yandaq", email = "ian@solutioneers.co.uk" }
 ]

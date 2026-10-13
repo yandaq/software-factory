@@ -30,3 +30,55 @@ def test_invalid_thinking_rejected():
     text = "---\nname: x\npurpose: p\nmodel: m\nthinking: huge\ntools: []\ncontract: {}\n---\nbody"
     with pytest.raises(ValidationError):
         parse_agent(text)
+
+
+def test_legacy_agent_defaults_to_pi():
+    assert load_agent(ROOT / "agents", "planner").harness == "pi"
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "codex"])
+def test_harness_effort_validation(harness):
+    text = (ROOT / "agents" / "planner.md").read_text()
+    assert parse_agent(text.replace("purpose:", f"harness: {harness}\npurpose:", 1)).harness == harness
+    with pytest.raises(ValidationError, match="unsupported"):
+        parse_agent(text.replace("purpose:", f"harness: {harness}\npurpose:", 1).replace("thinking: high", "thinking: max"))
+
+
+def test_invalid_harness_rejected():
+    text = (ROOT / "agents" / "planner.md").read_text().replace("purpose:", "harness: unknown\npurpose:", 1)
+    with pytest.raises(ValidationError):
+        parse_agent(text)
+
+
+@pytest.mark.parametrize("name", AGENT_NAMES)
+def test_task_templates_render_literal_context(name):
+    from sf.agents import TASK_VARIABLES, render_task
+
+    literal = '{{unknown}} {"json": 1} $HOME `command` £'
+    values = dict.fromkeys(TASK_VARIABLES[name], literal)
+    text = render_task(ROOT / "agents", name, values)
+    assert literal in text
+    if "feedback" in values:
+        values["feedback"] = ""
+        assert literal in render_task(ROOT / "agents", name, values)
+
+
+@pytest.mark.parametrize("text,reason", [
+    ("", "empty"), ("{{other}}", "unknown"), ("No context", "missing"),
+    ("{{ request }}", "malformed"), ("{{request", "malformed"), ("{{request}} }}", "malformed"),
+])
+def test_invalid_task_template(text, reason):
+    from sf.agents import validate_task_template
+
+    with pytest.raises(ValueError, match=f"planner.user.md: .*{reason}"):
+        validate_task_template("planner", text)
+
+
+def test_missing_task_template_and_context(tmp_path):
+    from sf.agents import load_task_template, render_task
+
+    with pytest.raises(ValueError, match="planner.user.md"):
+        load_task_template(tmp_path, "planner")
+    (tmp_path / "planner.user.md").write_text("{{request}} {{documentation}}")
+    with pytest.raises(ValueError, match="context"):
+        render_task(tmp_path, "planner", {})

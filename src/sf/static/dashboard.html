@@ -51,6 +51,19 @@ td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
 .grid section { margin-bottom: 0; }
 .log { font-family: var(--mono); font-size: 12px; max-height: 340px; overflow: auto; }
 .log div { padding: 2px 0; border-bottom: 1px dashed var(--line); word-break: break-word; }
+button, textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px 8px; }
+button { cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.documents { display: flex; flex-wrap: wrap; gap: 8px; }
+.document { font-family: var(--mono); font-size: 12px; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+dialog { width: min(900px, 95vw); max-height: 90vh; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; }
+dialog::backdrop { background: #0008; }
+dialog h2 { margin-top: 0; font-size: 18px; text-transform: none; overflow-wrap: anywhere; }
+textarea { width: 100%; height: 55vh; resize: vertical; font: 13px/1.5 var(--mono); }
+.editor-actions .danger { color: var(--bad); margin-right: auto; }
+.editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .muted { color: var(--muted); }
 a.art { color: var(--accent); cursor: pointer; margin-right: 12px; display: inline-block; font-family: var(--mono); font-size: 12px; }
 pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; background: var(--chip); padding: 12px; border-radius: 6px; max-height: 480px; overflow: auto; margin: 10px 0 0; }
@@ -74,6 +87,13 @@ pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; backgrou
   <aside><h1>Software factory runs <a href="/config" style="float:right;font-weight:400;font-size:13px;color:var(--accent)">config</a></h1><div id="runs"></div></aside>
   <main id="main"><p class="muted">Select a run.</p></main>
 </div>
+<dialog id="editor" aria-labelledby="editor-title">
+  <h2 id="editor-title"></h2>
+  <p class="muted">Changes are saved to the project document.</p>
+  <textarea id="editor-content" aria-label="Project Markdown" spellcheck="false" disabled></textarea>
+  <p id="editor-status" role="status"></p>
+  <div class="editor-actions"><button id="editor-delete" class="danger" disabled hidden>Delete file</button><button id="editor-cancel">Cancel</button><button id="editor-save" disabled>Save file</button></div>
+</dialog>
 <script>
 // Display names for stages whose internal name reads badly on the dashboard.
 const STAGE_LABELS = {branch: "sf"};
@@ -81,6 +101,7 @@ const stageLabel = st => STAGE_LABELS[st] || st;
 const STAGES = ["branch", "prompt", "plan", "implement", "document", "merge", "improve"];
 let selected = location.hash.slice(1) || null;
 let openArtefact = null;
+let documentMessage = "";
 let rendered = null;  // run id currently drawn in #main; the spinner shows only while switching runs
 const loading = on => { document.getElementById("loading").hidden = !on; };
 const LANE_COLOURS = ["#2f5bd3", "#1f8a4c", "#c53030", "#b7791f", "#7b3fc4", "#0f8a8a", "#d4489a", "#5f6b2a"];
@@ -90,6 +111,13 @@ const LANE_H = 34, LABEL_W = 170, AXIS_H = 22, DOT_R = 5, CTX_H = 120;
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = c => "$" + (c || 0).toFixed(4);
+function metric(u, key) {
+  const known = u.known || ["input", "output", "cache_read", "cache_write", "cost"];
+  const missing = (u.unavailable || []).includes(key);
+  if (missing && !known.includes(key)) return "N/A";
+  const value = key === "cost" ? money(u[key]) : String(u[key] || 0);
+  return value + (missing ? " (partial)" : "") + (key === "cost" && u.estimated ? " (est.)" : "");
+}
 const time = ts => ts ? new Date(ts).toLocaleTimeString() : "";
 
 async function getJSON(url) {
@@ -106,7 +134,7 @@ async function refreshRuns() {
       <button class="del" title="Delete run ${esc(r.run_id)}" aria-label="Delete run">🗑</button>
       <div class="id">${esc(r.run_id)}</div>
       <div class="meta"><span class="status s-${esc(r.status)}">${esc(r.status)}</span>
-        · ${esc(stageLabel(r.stage))}${r.loop ? " #" + r.loop : ""} · ${money(r.cost)}</div>
+        · ${esc(stageLabel(r.stage))}${r.loop ? " #" + r.loop : ""} · ${r.cost == null ? "N/A" : money(r.cost) + (r.cost_partial ? " (partial)" : "") + (r.cost_estimated ? " (est.)" : "")}</div>
     </div>`).join("") || `<p class="muted" style="padding:16px">No runs yet.</p>`;
 }
 
@@ -116,9 +144,8 @@ function tokenRows(tokens) {
     ...Object.entries(tokens.by_loop || {}).map(([k, v]) => ["loop " + k, v]),
     ["run", tokens.run || {}],
   ];
-  return rows.map(([name, u]) => `<tr><td>${esc(name)}</td><td class="n">${u.input || 0}</td>
-    <td class="n">${u.output || 0}</td><td class="n">${u.cache_read || 0}</td>
-    <td class="n">${u.cache_write || 0}</td><td class="n">${money(u.cost)}</td></tr>`).join("");
+  return rows.map(([name, u]) => `<tr><td>${esc(name)}</td>${["input", "output", "cache_read", "cache_write", "cost"]
+    .map(key => `<td class="n">${metric(u, key)}</td>`).join("")}</tr>`).join("");
 }
 
 function loopRows(state) {
@@ -199,7 +226,7 @@ function timelineSvg(points, live, agents) {
     const y = tokens => plotH - 6 - (tokens / ctxMax) * (CTX_H - 16);
     context = `<text class="lane-label" x="0" y="${lanesH + 18}">context</text>
       <text x="0" y="${lanesH + 34}">max ${kTokens(ctxMax)}</text>`;
-    // One line per agent invocation: each pi process starts with a fresh context.
+    // One line per agent invocation: each invocation starts with a fresh context.
     const runs = {};
     for (const p of ctx) (runs[p[1] + "#" + p[4]] ??= []).push(p);
     for (const pts of Object.values(runs)) {
@@ -211,9 +238,10 @@ function timelineSvg(points, live, agents) {
 }
 
 // Model and thinking effort under an agent's lane label, the model's provider prefix dropped to fit.
-function agentModel({model, thinking}, i) {
-  const full = `${model} · ${thinking}`;
-  let short = `${(model || "?").split("/").pop()} · ${thinking || "?"}`;
+function agentModel({harness, model, thinking}, i) {
+  const label = {pi: "Pi", "claude-code": "Claude Code", codex: "Codex"}[harness || "pi"];
+  const full = `${label} · ${model} · ${thinking}`;
+  let short = `${label} · ${(model || "?").split("/").pop()} · ${thinking || "?"}`;
   if (short.length > 28) short = short.slice(0, 27) + "…";
   return `<text x="0" y="${i * LANE_H + 28}"><title>${esc(full)}</title>${esc(short)}</text>`;
 }
@@ -240,8 +268,15 @@ async function refreshDetail() {
       <p class="muted">${esc(s.target)} · ${esc(s.branch)} → ${esc(s.trunk)}</p>
       <div class="stages">${stages}</div>
     </section>
-    <section class="timeline"><h2>Activity</h2>${timelineSvg(d.timeline,
+    <section class="timeline"><h2>Activity</h2><p class="muted">Context is plotted only when reported by the harness.</p>${timelineSvg(d.timeline,
       s.status === "running" && Date.now() - d.events_updated * 1000 < STALE_MS, d.agents)}</section>
+    <section id="project-documents"><h2>Project documents</h2>
+      ${d.documents_error ? `<p class="err">${esc(d.documents_error)}</p>` :
+        (d.documents || []).length ? `<div class="documents">${d.documents.map(path =>
+          `<button class="document" data-path="${esc(path)}">${esc(path)}</button>`).join("")}</div>` :
+          '<p class="muted">No Markdown documents found.</p>'}
+      <p id="document-message" role="status">${esc(documentMessage)}</p>
+    </section>
     <div class="grid">
       <section><h2>Stage results</h2><table>${results || '<tr><td class="muted">None yet.</td></tr>'}</table></section>
       <section><h2>Loops</h2><table><tr><th>#</th><th>Validation</th><th>Review</th></tr>${loopRows(s)}</table></section>
@@ -268,11 +303,100 @@ async function showArtefact(name) {
   pre.textContent = r.ok ? await r.text() : `Could not load ${name}: HTTP ${r.status}`;
 }
 
+const editor = document.getElementById("editor");
+const content = document.getElementById("editor-content");
+const editorStatus = document.getElementById("editor-status");
+const saveFile = document.getElementById("editor-save");
+const cancel = document.getElementById("editor-cancel");
+const deleteFile = document.getElementById("editor-delete");
+let editingUrl, editingRun, editingPath, original = "", saving = false, deletable = false, editorRequest = 0;
+
+cancel.addEventListener("click", () => editor.close());
+editor.addEventListener("cancel", e => { if (saving) e.preventDefault(); });
+content.addEventListener("input", () => { saveFile.disabled = content.value === original; });
+
+async function editDocument(path) {
+  const request = ++editorRequest;
+  editingRun = selected; editingPath = path;
+  editingUrl = `/api/runs/${encodeURIComponent(editingRun)}/document?path=${encodeURIComponent(path)}`;
+  document.getElementById("editor-title").textContent = path;
+  content.value = ""; content.disabled = true; saveFile.disabled = true;
+  deletable = false; deleteFile.disabled = true; deleteFile.hidden = true;
+  editorStatus.className = "muted"; editorStatus.textContent = "Loading…";
+  editor.showModal();
+  try {
+    const r = await fetch(editingUrl);
+    const data = await r.json();
+    if (request !== editorRequest || !editor.open) return;
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    original = data.content; content.value = original; content.disabled = false;
+    deletable = data.deletable === true; deleteFile.hidden = !deletable; deleteFile.disabled = !deletable;
+    editorStatus.textContent = ""; content.focus();
+  } catch (err) {
+    if (request === editorRequest && editor.open) {
+      editorStatus.className = "err"; editorStatus.textContent = err.message;
+    }
+  }
+}
+
+saveFile.addEventListener("click", async () => {
+  saving = true; saveFile.disabled = true; deleteFile.disabled = true; cancel.disabled = true; content.disabled = true;
+  try {
+    const r = await fetch(editingUrl, {
+      method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({content: content.value, original}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    original = content.value;
+    if (selected === editingRun) {
+      documentMessage = `Saved ${editingPath}`;
+      const message = document.getElementById("document-message");
+      if (message) message.textContent = documentMessage;
+    }
+    editor.close();
+  } catch (err) {
+    editorStatus.className = "err"; editorStatus.textContent = err.message;
+  } finally {
+    saving = false; cancel.disabled = false; content.disabled = false;
+    saveFile.disabled = content.value === original; deleteFile.disabled = !deletable;
+  }
+});
+
+deleteFile.addEventListener("click", async () => {
+  if (saving || !deletable || content.disabled) return;
+  if (!confirm(`Delete ${editingPath}? This removes the project document and discards any unsaved edits.`)) return;
+  saving = true; saveFile.disabled = true; deleteFile.disabled = true; cancel.disabled = true; content.disabled = true;
+  try {
+    const r = await fetch(editingUrl, {
+      method: "DELETE", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({original}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    if (selected === editingRun) {
+      documentMessage = `Deleted ${editingPath}`;
+      const message = document.getElementById("document-message");
+      if (message) message.textContent = documentMessage;
+      for (const button of document.querySelectorAll(".document")) {
+        if (button.dataset.path === editingPath) button.remove();
+      }
+    }
+    editor.close();
+    void tick();
+  } catch (err) {
+    editorStatus.className = "err"; editorStatus.textContent = err.message;
+  } finally {
+    saving = false; cancel.disabled = false; content.disabled = false;
+    saveFile.disabled = content.value === original; deleteFile.disabled = !deletable;
+  }
+});
+
 async function deleteRun(id) {
   if (!confirm(`Delete run ${id} and all its files? This cannot be undone.`)) return;
   const r = await fetch("/api/runs/" + encodeURIComponent(id), {method: "DELETE"});
   if (!r.ok) throw new Error(`delete ${id}: HTTP ${r.status}`);
-  if (selected === id) { selected = null; rendered = null; openArtefact = null; location.hash = "";
+  if (selected === id) { selected = null; rendered = null; openArtefact = null; documentMessage = ""; location.hash = "";
     document.getElementById("main").innerHTML = '<p class="muted">Select a run.</p>'; }
   tick();
 }
@@ -281,8 +405,10 @@ document.addEventListener("click", e => {
   const del = e.target.closest(".del");
   if (del) return void deleteRun(del.closest(".run").dataset.id).catch(err => {
     console.error(err); alert(err.message); });
+  const doc = e.target.closest(".document");
+  if (doc) return void editDocument(doc.dataset.path);
   const run = e.target.closest(".run");
-  if (run) { selected = run.dataset.id; openArtefact = null; location.hash = selected;
+  if (run) { selected = run.dataset.id; openArtefact = null; documentMessage = ""; location.hash = selected;
     if (selected !== rendered) loading(true); tick(); }
   const art = e.target.closest(".art");
   if (art && art.dataset.name === openArtefact) {

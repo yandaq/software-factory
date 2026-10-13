@@ -84,3 +84,40 @@ def test_trunk_errors_are_actionable(tmp_path):
     sh(empty, "git", "init", "-q", "-b", "main")
     with pytest.raises(TrunkError):
         resolve_trunk(empty, TargetConfig())
+
+
+def test_documentation_inventory_uses_git_files(target):
+    from conftest import sh
+
+    from sf.target import discover_documentation
+
+    (target / ".gitignore").write_text("ignored/\nignored.MD\n")
+    tracked = ["DESIGN.md", "components/widget/AGENTS.md", "ignored/tracked.md", "missing.md"]
+    for name in tracked:
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Document\n")
+    sh(target, "git", "add", "-f", "--", *tracked)
+    sh(target, "git", "commit", "-qm", "documents")
+    (target / "missing.md").unlink()
+    untracked = ['docs/nested/notes.MD', 'docs/space "quote" {{literal}}\nline.md', 'nested/readme.mD']
+    for name in untracked + ["ignored/hidden.md", "ignored.MD", "docs/code.py"]:
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("content")
+    (target / "linked.md").symlink_to(target / "DESIGN.md")
+    (target / "broken.md").symlink_to(target / "absent.md")
+    assert discover_documentation(target) == sorted([
+        "README.md", "DESIGN.md", "components/widget/AGENTS.md", "ignored/tracked.md", *untracked,
+    ])
+    assert discover_documentation(target) == discover_documentation(target)
+
+
+def test_documentation_inventory_empty_and_failure(target, tmp_path):
+    from sf.git import GitError
+    from sf.target import discover_documentation
+
+    (target / "README.md").unlink()
+    assert discover_documentation(target) == []
+    with pytest.raises(GitError):
+        discover_documentation(tmp_path)

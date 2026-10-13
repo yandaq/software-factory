@@ -83,6 +83,19 @@ def install_missing_standards(target: Path, templates: Path) -> list[str]:
     return installed
 
 
+def discover_documentation(target: Path) -> list[str]:
+    """Inventory existing repository Markdown using Git's tracked/visible files."""
+    files = g.git(target, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+    root = target.resolve()
+    documents = set()
+    for name in files.split("\0"):
+        path = target / name
+        if (name and path.suffix.lower() == ".md" and not path.is_symlink()
+                and path.is_file() and path.resolve().is_relative_to(root)):
+            documents.add(name)
+    return sorted(documents)
+
+
 _FENCE = re.compile(r"```(?:sh|bash|shell)\s*\n(.*?)```", re.DOTALL)
 
 

@@ -41,7 +41,7 @@ class LiveDisplay:
     def note(self, text: str) -> None:
         self.console.print(f"[bold cyan]sf[/] {text}")
 
-    def pi_event(self, inv: Invocation, event: dict[str, Any]) -> None:
+    def agent_event(self, inv: Invocation, event: dict[str, Any]) -> None:
         kind = event.get("type")
         tag = f"[dim]{inv.stage}#{inv.loop} {inv.agent}[/]"
         if kind == "tool_execution_start":
@@ -49,10 +49,15 @@ class LiveDisplay:
             self.console.print(f"{tag} → {event.get('toolName')} {args}", highlight=False, markup=True)
         elif kind == "message_update":
             u = event.get("usage") or {}
-            self.activity = f"{inv.agent}: streaming ({u.get('output', 0)} out tokens this message)"
+            suffix = f" ({u['output']} out tokens this message)" if "output" in u else ""
+            self.activity = f"{inv.agent}: streaming{suffix}"
         elif kind == "auto_retry_start":
             self.console.print(f"{tag} [yellow]retry {event.get('attempt')}: {event.get('errorMessage')}[/]")
         self.live.update(self._render())
+
+    def pi_event(self, inv: Invocation, event: dict[str, Any]) -> None:
+        """Compatibility callback for existing Pi display clients."""
+        self.agent_event(inv, event)
 
     def _tokens_table(self) -> Table:
         totals = self.run.state.totals()
@@ -64,7 +69,15 @@ class LiveDisplay:
         rows.append(("run", totals["run"]))
         for name, u in rows:
             u = Usage(**u)
-            table.add_row(name, str(u.input), str(u.output), str(u.cache_read), str(u.cache_write), f"{u.cost:.4f}")
+            values = []
+            for key in ("input", "output", "cache_read", "cache_write", "cost"):
+                value = f"{u.cost:.4f}" if key == "cost" else str(getattr(u, key))
+                if key in u.unavailable:
+                    value = f"{value} (partial)" if key in u.known else "N/A"
+                if key == "cost" and u.estimated and key in u.known:
+                    value += " (est.)"
+                values.append(value)
+            table.add_row(name, *values)
         return table
 
     def _render(self) -> Group:
@@ -95,16 +108,3 @@ class TerminalHuman:
             if choice == "a":
                 return "abort"
             return IntPrompt.ask("How many more loops?", default=1)
-
-    def review_idea(self, idea: dict[str, Any]) -> tuple[str, str]:
-        with self.display.paused():
-            self.console.print(
-                Panel(
-                    f"[bold]Rationale[/]\n{idea['rationale']}\n\n[bold]Evidence[/]\n{idea['evidence']}\n\n"
-                    f"[bold]Proposed change[/]\n{idea['proposed_change']}",
-                    title=idea["title"],
-                )
-            )
-            choice = Prompt.ask("[a]pprove / [s]kip / [r]eject", choices=["a", "s", "r"])
-            note = Prompt.ask("Note (optional)", default="")
-            return {"a": "approved", "s": "skipped", "r": "rejected"}[choice], note

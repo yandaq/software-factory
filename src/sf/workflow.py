@@ -1,17 +1,19 @@
 """The fixed workflow: branch → prompt → plan → implement ⇄ review → document → merge → improve."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from sf import git as g
-from sf.agents import load_agent
-from sf.pi import Display, StageFailed, run_agent
+from sf.agents import load_agent, render_task
 from sf.run import STAGES, Run, RunState
+from sf.runner import Display, StageFailed, run_agent
 from sf.target import (
     STANDARDS_FILES,
     StandardsError,
     TrunkError,
+    discover_documentation,
     install_missing_standards,
     load_config,
     resolve_trunk,
@@ -27,7 +29,6 @@ class Aborted(Exception):
 class Human(Protocol):
     def approve_plan(self, plan: str) -> bool: ...
     def cap_reached(self, loops: int) -> Any: ...
-    def review_idea(self, idea: dict[str, Any]) -> tuple[str, str]: ...
 
 
 class Notifier(Display, Protocol):
@@ -122,8 +123,22 @@ class Workflow:
     def _repo_name(self, repo: Path) -> str:
         return "factory" if repo == self.factory else "target"
 
-    def _agent(self, name: str, task: str, cwd: Path | None = None) -> dict[str, Any]:
-        agent = load_agent(self.factory / "agents", name)
+    def _agent(self, name: str, context: dict[str, str], cwd: Path | None = None, *,
+               documentation_paths: list[str] | None = None) -> dict[str, Any]:
+        try:
+            documents = (discover_documentation(self.run.target) if documentation_paths is None
+                         else documentation_paths)
+        except (g.GitError, OSError, ValueError) as e:
+            self.run.log("documentation_discovery_failed", agent=name, target=str(self.run.target), error=str(e))
+            raise StageFailed(f"documentation discovery for {self.run.target}: {e}") from e
+        documentation = (f"Target repository: {json.dumps(str(self.run.target))}\n"
+                         f"Repository-relative Markdown paths:\n{json.dumps(documents, ensure_ascii=False, indent=2)}")
+        try:
+            agent = load_agent(self.factory / "agents", name)
+            task = render_task(self.factory / "agents", name, context | {"documentation": documentation})
+        except ValueError as e:
+            self.run.log("prompt_invalid", agent=name, error=str(e))
+            raise StageFailed(str(e)) from e
         return run_agent(self.run, agent, task, cwd or self.run.target, self.display)
 
     def _commit_target(self, what: str) -> bool:
@@ -163,10 +178,7 @@ class Workflow:
         prompt = (self.run.dir / "prompt.md").read_text()
         out = self._agent(
             "planner",
-            (
-                "Produce an implementation plan for the request below. Read AGENTS.md and "
-                f"docs/ (including docs/architecture.md) in the repository first.\n\n# Request\n\n{prompt}"
-            ),
+            {"request": prompt},
         )
         plan = out["plan"]
         (self.run.dir / "plan.md").write_text(plan.rstrip() + "\n")
@@ -202,15 +214,15 @@ class Workflow:
         """One implement → validate → review loop. Returns True when the reviewer approves."""
         self.run.log("loop_start")
         plan = (self.run.dir / "plan.md").read_text()
-        task = f"Implement this plan in the repository.\n\n# Plan\n\n{plan}"
+        feedback = ""
         prev = n - 1
         review = self.run.dir / f"review-{prev}.md"
         validation = self.run.dir / f"validation-{prev}.log"
         if validation.exists() and self.state.results.get(f"validation-{prev}") == "failed":
-            task += f"\n\n# Latest validation output (failed)\n\n```\n{validation.read_text()}\n```"
+            feedback = f"# Latest validation output (failed)\n\n```\n{validation.read_text()}\n```"
         elif review.exists():
-            task += f"\n\n# Latest review findings\n\n{review.read_text()}"
-        out = self._agent("implementer", task)
+            feedback = f"# Latest review findings\n\n{review.read_text()}"
+        out = self._agent("implementer", {"plan": plan, "feedback": feedback})
         self._commit_target(f"implement (loop {n})")
         self.run.log("implemented", summary=out.get("summary"))
 
@@ -226,10 +238,7 @@ class Workflow:
 
         out = self._agent(
             "reviewer",
-            (
-                "Review the work on this branch against docs/coding-standards.md. "
-                f"Inspect `git diff {self.state.trunk}...HEAD`.\n\n# Plan\n\n{plan}"
-            ),
+            {"plan": plan, "trunk": self.state.trunk},
         )
         (self.run.dir / f"review-{n}.md").write_text(render_review(n, out))
         self.state.results[f"review-{n}"] = out["verdict"]
@@ -241,11 +250,7 @@ class Workflow:
         trunk, branch = self.state.trunk, self.state.branch
         out = self._agent(
             "documenter",
-            (
-                f"Run `git diff {trunk}...{branch}` and update the documentation to match. "
-                "Update existing docs; create new docs only under docs/. Do not touch code or "
-                f"the standards files ({', '.join(STANDARDS_FILES)})."
-            ),
+            {"trunk": trunk, "branch": branch, "standards_files": ", ".join(STANDARDS_FILES)},
         )
         violations = [p for status, p in g.changed_paths(self.run.target) if not _doc_change_allowed(status, p)]
         if violations:
@@ -279,8 +284,6 @@ class Workflow:
 
 
 def _doc_change_allowed(status: str, path: str) -> bool:
-    if path in STANDARDS_FILES:
-        return False
     if path.startswith("docs/"):
         return True
     return status == "M" and path.endswith(".md")

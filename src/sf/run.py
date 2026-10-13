@@ -22,6 +22,9 @@ class Usage(BaseModel):
     cache_read: int = 0
     cache_write: int = 0
     cost: float = 0.0
+    unavailable: list[str] = Field(default_factory=list)
+    known: list[str] = Field(default_factory=lambda: ["input", "output", "cache_read", "cache_write", "cost"])
+    estimated: bool = False
 
     def __add__(self, other: Usage) -> Usage:
         return Usage(
@@ -30,6 +33,9 @@ class Usage(BaseModel):
             cache_read=self.cache_read + other.cache_read,
             cache_write=self.cache_write + other.cache_write,
             cost=self.cost + other.cost,
+            unavailable=sorted(set(self.unavailable) | set(other.unavailable)),
+            known=sorted(set(self.known) | set(other.known)),
+            estimated=self.estimated or other.estimated,
         )
 
     @classmethod
@@ -40,6 +46,7 @@ class Usage(BaseModel):
             cache_read=u.get("cacheRead", 0),
             cache_write=u.get("cacheWrite", 0),
             cost=(u.get("cost") or {}).get("total", 0.0),
+            estimated=True,
         )
 
 
@@ -48,6 +55,10 @@ class Invocation(BaseModel):
     stage: str
     loop: int
     n: int
+    harness: str = "pi"
+    model: str | None = None
+    thinking: str | None = None
+    session_id: str | None = None
     ok: bool = False
     usage: Usage = Field(default_factory=Usage)
 
@@ -68,9 +79,9 @@ class RunState(BaseModel):
     invocations: list[Invocation] = Field(default_factory=list)
 
     def totals(self) -> dict[str, Any]:
-        by_stage: dict[str, Usage] = defaultdict(Usage)
-        by_loop: dict[int, Usage] = defaultdict(Usage)
-        total = Usage()
+        by_stage: dict[str, Usage] = defaultdict(lambda: Usage(known=[]))
+        by_loop: dict[int, Usage] = defaultdict(lambda: Usage(known=[]))
+        total = Usage(known=[])
         for inv in self.invocations:
             by_stage[inv.stage] += inv.usage
             if inv.stage == "implement":
@@ -91,7 +102,7 @@ class Run:
         self.state = state
         self.dir = factory / "runs" / state.run_id
         (self.dir / "sessions").mkdir(parents=True, exist_ok=True)
-        self._pi_counts: dict[str, int] = defaultdict(int)
+        self._invocation_counts: dict[str, int] = defaultdict(int)
 
     @classmethod
     def load(cls, factory: Path, run_id: str) -> Run:
@@ -101,7 +112,7 @@ class Run:
         state = RunState.model_validate_json(path.read_text())
         run = cls(factory, state)
         for inv in state.invocations:
-            run._pi_counts[inv.stage] = max(run._pi_counts[inv.stage], inv.n)
+            run._invocation_counts[inv.stage] = max(run._invocation_counts[inv.stage], inv.n)
         return run
 
     @property
@@ -130,8 +141,8 @@ class Run:
 
     def next_invocation(self, agent: str) -> Invocation:
         stage = self.state.stage
-        self._pi_counts[stage] += 1
-        inv = Invocation(agent=agent, stage=stage, loop=self.state.loop, n=self._pi_counts[stage])
+        self._invocation_counts[stage] += 1
+        inv = Invocation(agent=agent, stage=stage, loop=self.state.loop, n=self._invocation_counts[stage])
         self.state.invocations.append(inv)
         return inv
 

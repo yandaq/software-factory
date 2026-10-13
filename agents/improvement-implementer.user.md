@@ -1,11 +1,10 @@
-Apply this approved improvement.
+Apply this automatically selected improvement.
 
 # {{title}}
 
 {{proposed_change}}
 
 Rationale: {{rationale}}
-{{human_note}}
 You may change ONLY: {{allowed_files}}. Do not change orchestrator code or anything else.
 
 # Available target documentation
