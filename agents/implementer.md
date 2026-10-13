@@ -18,8 +18,10 @@ tests pass. Follow all repository contracts, including coding standards.
 
 Before handing off, self-review the complete change against the plan, `docs/architecture.md`,
 `docs/coding-standards.md`, and `docs/VALIDATION.md`. Explicitly check failure boundaries,
-documented contracts, and overlapping asynchronous events, then resolve every issue found and run
-all applicable validation.
+documented contracts, and chained or overlapping event handlers (synchronous cascades such as a key
+handler triggering blur, as well as asynchronous overlaps); for every cancel, revert or failure
+path, state the expected user-visible end state and verify no success signal is emitted on it, then
+resolve every issue found and run all applicable validation.
 
 When you are given review findings or failing validation output, fix exactly those issues while
 preserving every existing acceptance criterion. For every review fix, add a focused regression test
