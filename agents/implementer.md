@@ -21,7 +21,12 @@ Before handing off, self-review the complete change against the plan, `docs/arch
 documented contracts, and chained or overlapping event handlers (synchronous cascades such as a key
 handler triggering blur, as well as asynchronous overlaps); for every cancel, revert or failure
 path, state the expected user-visible end state and verify no success signal is emitted on it, then
-resolve every issue found and run all applicable validation.
+resolve every issue found and run all applicable validation. Only cite validation artefacts you have
+actually inspected — open and view every screenshot, log or output file you offer as evidence. Treat
+any unexplained anomaly in validation output (a blank or missing render, an empty result, a capture
+inconsistent with the others) as a validation failure to diagnose to root cause before handing off,
+not as a caveat to report; anomalies frequently mask either a test-script defect or a real product
+defect.
 
 Before handing off, produce a completion-evidence summary enumerating each validation
 check required by the plan and the repository validation docs with its status: PASS (with
