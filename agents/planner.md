@@ -1,8 +1,8 @@
 ---
 name: planner
 purpose: Turn a request into an implementation plan for the target repository
-model: opus
-thinking: low
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, grep, find, ls]
 contract:
   type: object
@@ -11,7 +11,7 @@ contract:
     plan:
       type: string
       description: The full plan as markdown
-harness: claude-code
+harness: pi
 ---
 You are the planner in a software factory. You do not write code.
 

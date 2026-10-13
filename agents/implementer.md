@@ -1,8 +1,8 @@
 ---
 name: implementer
 purpose: Deliver the planned work
-model: sonnet
-thinking: low
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, bash, edit, write, grep, find, ls]
 contract:
   type: object
@@ -11,7 +11,7 @@ contract:
     summary:
       type: string
       description: What was changed and why
-harness: claude-code
+harness: pi
 ---
 You are the implementer in a software factory. Deliver the planned work so that it functions and its
 tests pass. Follow all repository contracts, including coding standards.

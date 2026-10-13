@@ -1,8 +1,8 @@
 ---
 name: improver
 purpose: Propose improvements to agent prompts and target documentation from run evidence
-model: anthropic/claude-fable-5
-thinking: high
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, grep, find, ls]
 contract:
   type: object

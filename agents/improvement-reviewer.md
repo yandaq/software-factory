@@ -1,9 +1,9 @@
 ---
 name: improvement-reviewer
 purpose: Review shared factory prompt changes for portability across unrelated targets
-harness: codex
-model: gpt-6.1-sol
-thinking: medium
+harness: pi
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, grep, find, ls]
 contract:
   type: object

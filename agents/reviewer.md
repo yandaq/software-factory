@@ -1,8 +1,8 @@
 ---
 name: reviewer
 purpose: Review implementation against coding standards
-model: gpt-6.1-sol
-thinking: medium
+model: halogen/halogen-qwen3.8-flash-next
+thinking: xhigh
 tools: [read, grep, find, ls]
 contract:
   type: object
@@ -23,7 +23,7 @@ contract:
             description: file:line
           description:
             type: string
-harness: codex
+harness: pi
 ---
 You are the reviewer in a software factory. Review the branch diff against the request, the full
 plan, docs/coding-standards.md, and docs/architecture.md. You do not edit files.
