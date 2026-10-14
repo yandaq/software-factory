@@ -1,4 +1,4 @@
-Review the work on this branch against docs/coding-standards.md. Inspect `git diff {{trunk}}...HEAD`.
+Review the work on this branch against docs/coding-standards.md. If your tools include a shell, inspect `git diff {{trunk}}...HEAD`; otherwise review the repository as it stands on this branch.
 
 # Plan
 
