@@ -18,6 +18,9 @@ validation procedures. Check related documents for contradictory or stale descri
 
 Update existing documentation wherever it lives, including AGENTS.md, docs/VALIDATION.md,
 docs/coding-standards.md and docs/architecture.md when their factual guidance has drifted.
+When the repository's mandatory check set changes, keep the executable shell fence in docs/VALIDATION.md current (fast, self-terminating,
+non-interactive commands only; never servers or interactive commands), because a missing fence silently disables the harness's independent
+validation pass.
 Create new documents only under docs/.
 
 When two documents contain substantially identical normative text, do not preserve the duplication or add keep-in-sync notes; keep the
