@@ -10,10 +10,29 @@ Run from the root of this repo (the factory repo):
 ```sh
 uv run sf run --target ../my-app "Add a /health endpoint"   # or --prompt-file req.md
 uv run sf run --target ../my-app --approve-plan "..."        # human approves plan.md first
+uv run sf watch --target ../my-app ./prompts                    # run every .md dropped into ./prompts/todo
 uv run sf resume <run-id>                                    # continue after a failure
 uv run sf improve <run-id>                                   # re-enter the improve phase
 uv run sf dashboard [--port 8765]                            # web dashboard at http://127.0.0.1:8765
 ```
+
+`sf watch` turns a folder into a prompt queue. It creates `todo/`, `doing/` and `done/` inside the folder
+it is given and then monitors `todo/` until you press Ctrl+C (exit 0). Each Markdown file you drop into
+`todo/` becomes one run whose prompt is that file's content: the file moves to `doing/` while the run
+executes and to `done/` when the run succeeds. Runs never overlap and the oldest file goes first
+(oldest modification time, ties broken by name); files that are not Markdown, subdirectories and files
+still being written are left alone. A failed or aborted run leaves its file in `doing/` for inspection
+and `sf resume`, and the watch reports it and moves on to the next file instead of retrying it. The run
+lock is taken per run and released in between, so `sf resume` still fits; while another `sf` process
+holds it, prompts wait in `todo/`. Per-run failures never end the watch or the process.
+
+A prompt is any regular `*.md` file (any case) sitting directly in `todo/`. `todo/` is re-read about every
+2 s and a file is claimed only once it has gone about 1 s without modification, so a file still being
+written is never started. A name already used in `doing/` or `done/` is suffixed (`fix.md` → `fix-1.md`),
+so re-dropping a prompt never overwrites the earlier copy. Before watching, `sf watch` checks that the
+current directory is the factory repo and that the target is a git repository with a usable trunk: an
+unusable target exits 1, a `FOLDER` argument that is an existing file is a usage error, and neither
+creates the queue folders.
 
 The dashboard is read-only and refreshes every 2 s: every run's status, the stage pipeline, review/validation
 results per loop, token usage, artefacts (plan, reviews, validation logs, stderr), orchestrator events and tool calls.

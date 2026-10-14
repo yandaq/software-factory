@@ -153,13 +153,19 @@ class RunLock:
     def __init__(self, factory: Path):
         self.path = factory / "runs" / ".lock"
 
+    def holder(self) -> int | None:
+        """The pid of the live process holding the lock, or None when nothing holds it."""
+        try:
+            pid = int(self.path.read_text().strip() or 0)
+        except FileNotFoundError:
+            return None
+        return pid if pid and _alive(pid) else None
+
     def __enter__(self) -> Self:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            pid = int(self.path.read_text().strip() or 0)
-            if pid and _alive(pid):
-                raise RuntimeError(f"another sf run is active (pid {pid}, lock {self.path})")
-            self.path.unlink()
+        if (pid := self.holder()) is not None:
+            raise RuntimeError(f"another sf run is active (pid {pid}, lock {self.path})")
+        self.path.unlink(missing_ok=True)  # a lock left by a dead process is ours to take
         fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
