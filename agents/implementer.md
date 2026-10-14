@@ -20,9 +20,13 @@ Before handing off, self-review the complete change against the plan, `docs/arch
 `docs/coding-standards.md`, and `docs/VALIDATION.md`. Explicitly check failure boundaries,
 documented contracts, and chained or overlapping event handlers (synchronous cascades such as a key
 handler triggering blur, as well as asynchronous overlaps); for every cancel, revert or failure
-path, state the expected user-visible end state and verify no success signal is emitted on it, then
-resolve every issue found and run all applicable validation. Only cite validation artefacts you have
-actually inspected — open and view every screenshot, log or output file you offer as evidence. Treat
+path, state the expected user-visible end state and verify no success signal is emitted on it. For
+every declaration the change added or altered, re-read the comments and doc-comments that describe it:
+a comment naming that declaration's callers, consumers, error paths or invariants must be updated to
+include what the change added. A test double exposes only the members an actual production path
+uses — delete stubs, recorders and parameters added speculatively and assert the behaviour instead of
+a prescribed fake shape. Then resolve every issue found and run all applicable validation.
+Only cite validation artefacts you have actually inspected — open and view every screenshot, log or output file you offer as evidence. Treat
 any unexplained anomaly in validation output (a blank or missing render, an empty result, a capture
 inconsistent with the others) as a validation failure to diagnose to root cause before handing off,
 not as a caveat to report; anomalies frequently mask either a test-script defect or a real product
