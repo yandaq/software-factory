@@ -26,6 +26,14 @@ and `sf resume`, and the watch reports it and moves on to the next file instead 
 lock is taken per run and released in between, so `sf resume` still fits; while another `sf` process
 holds it, prompts wait in `todo/`. Per-run failures never end the watch or the process.
 
+A prompt is any regular `*.md` file (any case) sitting directly in `todo/`. `todo/` is re-read about every
+2 s and a file is claimed only once it has gone about 1 s without modification, so a file still being
+written is never started. A name already used in `doing/` or `done/` is suffixed (`fix.md` → `fix-1.md`),
+so re-dropping a prompt never overwrites the earlier copy. Before watching, `sf watch` checks that the
+current directory is the factory repo and that the target is a git repository with a usable trunk: an
+unusable target exits 1, a `FOLDER` argument that is an existing file is a usage error, and neither
+creates the queue folders.
+
 The dashboard is read-only and refreshes every 2 s: every run's status, the stage pipeline, review/validation
 results per loop, token usage, artefacts (plan, reviews, validation logs, stderr), orchestrator events and tool calls.
 The **config** page (`/config`) sets each agent's harness, model and thinking level by updating only those

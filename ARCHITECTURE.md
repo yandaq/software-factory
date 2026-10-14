@@ -2,9 +2,9 @@
 
 | Module | Responsibility |
 |---|---|
-| `cli.py` | Typer commands; lockfile; maps outcomes to exit codes |
-| `mailbox.py` | Watch-folder queue only: `todo/`/`doing/`/`done/` layout, oldest-first candidates, settle guard, collision-safe claim/complete and the monitor loop; the caller supplies the per-file executor, poll interval and busy reason |
-| `workflow.py` | Stage driver, per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge |
+| `cli.py` | Typer commands; lockfile; watch wiring (per-run `RunLock`, `mailbox_*` events, up-front target check); maps outcomes to exit codes |
+| `mailbox.py` | Watch-folder queue only: `todo/`/`doing/`/`done/` layout, oldest-first candidates, settle guard, collision-safe claim/complete and the monitor loop; the caller supplies the per-file executor and the busy reason, poll and settle intervals default to module constants |
+| `workflow.py` | Stage driver, run-id allocation (`YYYYMMDD-HHMMSS`, `-N` suffixed when `runs/<id>` exists), per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge |
 | `improve.py` | Improve phase: automatic improver suggestions, decision history, `improvements.jsonl`, scope enforcement |
 | `runner.py` | Shared invocation lifecycle, streamed subprocess boundary, JSON contract validation + re-prompts |
 | `pi.py`, `claude.py`, `codex.py` | Native CLI invocation, session handling, success detection and event/usage normalization; `pi.py` retains original runner imports for compatibility |
@@ -29,7 +29,11 @@
   `todo/` again as a fresh run; `doing/` then doubles as the queue's visible failure list.
 - **The run lock is taken per run, not per watch.** `sf watch` checks the lock before each claim and holds
   it only while a run executes, so `sf resume` still fits between prompts and a busy lock leaves prompts
-  in `todo/`. Two concurrent `sf watch` processes are not coordinated beyond that check.
+  in `todo/`. The check is `RunLock.holder()`, a read-only query that reports the pid of a live holder and
+  ignores a lock left by a dead process - the same rule `RunLock` itself applies when taking over. Two
+  concurrent `sf watch` processes are not coordinated beyond that check: the check and the acquisition are
+  not atomic, so a prompt that loses that race is reported as a failed file and left in `doing/` with no
+  run created for it.
 - **The queue knows nothing about runs.** `mailbox.py` handles folders only; the CLI supplies the per-file
   executor, the sleep and the busy reason, and owns the run, its `mailbox_*` events and its terminal
   notes. The trade-off is that the watch's behaviour is proven by two layers of tests - queue-level and

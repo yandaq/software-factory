@@ -7,6 +7,8 @@ A Python orchestrator that drives the Pi CLI coding agent through a fixed workfl
 
 - **Factory repo** (this repo): orchestrator code, agent definitions, starter templates, run logs.
   - Trunk is `main`.
+  - Its architecture record is `ARCHITECTURE.md`; `docs/architecture.md` points there, including when the
+    factory is used as its own target.
 - **Target repo**: the software being built. It is passed with `--target <path>`.
   - Optional `<target>/.sf.toml` holds per-target settings: `trunk` (default `main`) and validation overrides.
   - It contains `AGENTS.md` at the root; every other doc lives in `docs/`, including `docs/coding-standards.md`, `docs/architecture.md` and `docs/VALIDATION.md`.
@@ -40,6 +42,10 @@ sf improve <run-id>        # re-enter the improve phase
   run leaves it in `doing/` (no automatic retry) and the watch continues with the next file. The lock is
   taken per run and released in between, so `sf resume` fits between prompts and a busy lock leaves
   prompts in `todo/`. `sf run`, `sf resume`, `sf improve` and `sf dashboard` are unchanged.
+  `<folder>` is created when missing; an existing file in its place is a usage error. The target is
+  checked once before watching — a git repository with a resolvable trunk — and an unusable one exits 1
+  without creating the queue. Polling (~2 s) and the settle window (~1 s) are module constants with no
+  CLI flag. A name already used in `doing/` or `done/` is suffixed (`fix.md` → `fix-1.md`).
 
 ## 4. Agent definitions
 
