@@ -26,11 +26,20 @@ A Python orchestrator that drives the Pi CLI coding agent through a fixed workfl
 
 ```
 sf run --target <path> "<prompt>" | --prompt-file <file> [--approve-plan]
+sf watch --target <path> <folder> [--approve-plan]
 sf resume <run-id>
 sf improve <run-id>        # re-enter the improve phase
 ```
 
 - Runs are serial and guarded by a lockfile.
+- **Watch folder.** `<folder>` replaces the prompt argument: the command creates `todo/`, `doing/` and
+  `done/` inside it and monitors `todo/` until Ctrl+C, which exits cleanly. Each regular Markdown file
+  (case-insensitive `.md`) directly in `todo/` becomes one run's prompt, oldest modification time first
+  with ties broken by name; other files, subdirectories and files still being written wait in `todo/`.
+  A claimed file moves to `doing/` and reaches `done/` only when its run succeeds: a failed or aborted
+  run leaves it in `doing/` (no automatic retry) and the watch continues with the next file. The lock is
+  taken per run and released in between, so `sf resume` fits between prompts and a busy lock leaves
+  prompts in `todo/`. `sf run`, `sf resume`, `sf improve` and `sf dashboard` are unchanged.
 
 ## 4. Agent definitions
 
@@ -95,7 +104,9 @@ pi --mode json --model <model> --thinking <thinking> --tools <tools> \
      - **Allowed to change:** `agents/*.md` (committed in the factory repo, with the run-id in the commit message) and any existing Markdown document in the discovered target inventory (a follow-up commit on the target trunk). The inventory is frozen before each selected improvement and supplies its context, enforced target allowlist and commit paths. New target documents remain the documenter's responsibility under `docs/`.
      - **Not allowed to change:** the orchestrator code, target code, or newly created target files.
 
-Run state is saved to `runs/<id>/run-state.json` as each stage completes.
+Run state is saved to `runs/<id>/run-state.json` as each stage completes. Run ids are
+`YYYYMMDD-HHMMSS`, suffixed `-N` when `runs/<id>` already exists: two runs started inside one second —
+which the watch monitor makes easy — must not share a run directory, state file or event stream.
 
 ## 7. Observability
 
@@ -106,6 +117,11 @@ Run state is saved to `runs/<id>/run-state.json` as each stage completes.
 - `pi-<stage>-<n>.stderr`
 - `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`
 - `run-state.json`: the current stage, the loop number, the result of each stage, and token totals.
+
+Watched prompts also leave `sf`-source events in the run they produced: `mailbox_claimed` (file name,
+watch root), `mailbox_completed` (file name, `done/` folder) and `mailbox_failed` (file name, outcome
+and `sf resume` hint). The dashboard's orchestrator lane already lists every `sf` event, so it shows
+which dropped file produced the run and where that file went.
 
 **Token accounting:**
 

@@ -57,6 +57,20 @@ def start(factory, target, human=None, approve_plan=False):
     return run, Workflow(run, human or Human(), Display())
 
 
+def test_runs_created_in_the_same_second_get_their_own_ids(factory, target):
+    """The watch monitor can start two runs inside one second; they must not share a run directory."""
+    first = new_run(factory, target, "build an app", False)
+    second = new_run(factory, target, "build another app", False)
+    assert first.state.run_id != second.state.run_id
+    assert first.dir != second.dir
+    assert first.dir.is_dir() and second.dir.is_dir()
+    assert (first.dir / "prompt.md").read_text() == "build an app\n"
+    assert (second.dir / "prompt.md").read_text() == "build another app\n"
+    assert second.state.branch == f"sf/{second.state.run_id}"
+    assert Run.load(factory, first.state.run_id).state.run_id == first.state.run_id
+    assert Run.load(factory, second.state.run_id).state.run_id == second.state.run_id
+
+
 def test_happy_path(factory, target, fake_pi):
     s = fake_pi(script())
     run, wf = start(factory, target)

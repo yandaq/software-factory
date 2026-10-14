@@ -35,10 +35,24 @@ class Notifier(Display, Protocol):
     def note(self, text: str) -> None: ...
 
 
+def _run_id(factory: Path) -> str:
+    """The current second, suffixed `-N` until no `runs/<id>` directory uses it.
+
+    Two runs started in the same second, which the watch monitor makes easy, must not share a run
+    directory, state file or event stream.
+    """
+    base = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_id, n = base, 1
+    while (factory / "runs" / run_id).exists():
+        run_id = f"{base}-{n}"
+        n += 1
+    return run_id
+
+
 def new_run(factory: Path, target: Path, prompt: str, approve_plan: bool) -> Run:
     target = target.resolve()
     g.git(target, "rev-parse", "--git-dir")
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_id = _run_id(factory)
     trunk = resolve_trunk(target, load_config(target))
     state = RunState(
         run_id=run_id,

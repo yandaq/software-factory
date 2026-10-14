@@ -3,6 +3,7 @@
 | Module | Responsibility |
 |---|---|
 | `cli.py` | Typer commands; lockfile; maps outcomes to exit codes |
+| `mailbox.py` | Watch-folder queue only: `todo/`/`doing/`/`done/` layout, oldest-first candidates, settle guard, collision-safe claim/complete and the monitor loop; the caller supplies the per-file executor, poll interval and busy reason |
 | `workflow.py` | Stage driver, per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge |
 | `improve.py` | Improve phase: automatic improver suggestions, decision history, `improvements.jsonl`, scope enforcement |
 | `runner.py` | Shared invocation lifecycle, streamed subprocess boundary, JSON contract validation + re-prompts |
@@ -18,6 +19,21 @@
 
 ## Compromises
 
+- **The watch queue is polled, not watched.** `mailbox.py` re-reads `todo/` on a short interval instead of
+  taking a filesystem-watcher dependency: a dropped prompt starts within one poll, and a file is only
+  claimed once it has been unmodified for the settle window, so a half-written drop is never a prompt.
+  A poll is a directory sweep plus a `stat` per file - no model call, no new dependency.
+- **A failed prompt is parked, not retried.** Its file stays in `doing/` with its run resumable, and the
+  watch moves on. There is no fourth folder and no automatic retry: three folders were specified, and a
+  permanently failing prompt would otherwise loop forever. Retrying one means dropping the file into
+  `todo/` again as a fresh run; `doing/` then doubles as the queue's visible failure list.
+- **The run lock is taken per run, not per watch.** `sf watch` checks the lock before each claim and holds
+  it only while a run executes, so `sf resume` still fits between prompts and a busy lock leaves prompts
+  in `todo/`. Two concurrent `sf watch` processes are not coordinated beyond that check.
+- **The queue knows nothing about runs.** `mailbox.py` handles folders only; the CLI supplies the per-file
+  executor, the sleep and the busy reason, and owns the run, its `mailbox_*` events and its terminal
+  notes. The trade-off is that the watch's behaviour is proven by two layers of tests - queue-level and
+  end-to-end through `cli._watch_loop` - rather than one.
 - **Scope rules are enforced after the fact.** Native permissions do not express every role's allowed paths, so the
   orchestrator inspects `git status` after the documenter and improvement-implementer. Documenter
   violations are reverted and fail the stage; improvement-implementer violations are reverted and
