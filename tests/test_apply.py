@@ -6,11 +6,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from conftest import calls, sh
 from typer.testing import CliRunner
 
+from sf import git as g
 from sf.apply import recover_applications, start_application
 from sf.cli import app
 from sf.dashboard import serve, set_agent_config
@@ -71,11 +73,15 @@ def test_apply_runs_only_configured_implementer_in_dirty_factory(apply_server, f
         assert text in invocation["message"]
     assert (factory / "README.md").read_text() == "existing edits\n"
     assert (factory / "fix.py").read_text() == "fixed\n"
-    assert sh(factory, "git", "rev-parse", "HEAD") == before
+    assert sh(factory, "git", "rev-parse", "HEAD") != before
+    assert not sh(factory, "git", "status", "--porcelain")
+    committed = json.loads(sh(factory, "git", "show", "HEAD:improvements.jsonl").splitlines()[0])
+    assert committed == load_decisions(factory)[0]
     state = Run.load(factory, application["run_id"]).state
     assert state.kind == "improvement" and state.status == "done"
     assert state.invocations[0].harness == "pi" and state.invocations[0].ok
     assert state.completed == ["implement"]
+    assert state.results["commit"] == sh(factory, "git", "rev-parse", "HEAD").strip()
     assert {k: v for k, v in load_decisions(factory)[0].items() if k != "application"} == IDEA
     assert request(apply_server)[0] == 409
     assert request(apply_server, {**IDEA, "title": "Gone"})[0] == 404
@@ -111,10 +117,12 @@ def test_apply_busy_and_delete_running(apply_server, factory, monkeypatch):
 
 def test_agent_failure_is_retryable(apply_server, factory, fake_pi):
     script = fake_pi({"implementer": [{"exit": 1}, {"text": '{"summary":"Retry succeeded"}'}]})
+    before = sh(factory, "git", "rev-parse", "HEAD")
     assert request(apply_server)[0] == 202
     failure = finished(factory)
     assert failure["status"] == "failed" and "exited with code 1" in failure["error"]
     assert Run.load(factory, failure["run_id"]).state.status == "failed"
+    assert sh(factory, "git", "rev-parse", "HEAD") == before
     assert request(apply_server)[0] == 202
     success = finished(factory)
     assert success["status"] == "applied" and success["run_id"] != failure["run_id"]
@@ -124,12 +132,15 @@ def test_agent_failure_is_retryable(apply_server, factory, fake_pi):
 def test_validation_failure_keeps_partial_changes(apply_server, factory, fake_pi):
     (factory / ".sf.toml").write_text('validation = ["exit 7"]\n')
     fake_pi({"implementer": [{"text": '{"summary":"Implemented"}', "write": {"partial.py": "partial"}}]})
+    before = sh(factory, "git", "rev-parse", "HEAD")
     assert request(apply_server)[0] == 202
     result = finished(factory)
     assert result["status"] == "failed" and "validation failed" in result["error"]
     assert (factory / "partial.py").read_text() == "partial"
     log = factory / "runs" / result["run_id"] / "validation-1.log"
     assert "[exit 7]" in log.read_text()
+    assert sh(factory, "git", "rev-parse", "HEAD") == before
+    assert "commit" not in Run.load(factory, result["run_id"]).state.results
 
 
 def test_startup_failure_records_failure_and_unlocks(apply_server, factory, monkeypatch):
@@ -159,8 +170,10 @@ def test_recover_interrupted_execution(apply_server, factory, monkeypatch):
     assert "interrupted" in finished(factory)["error"]
 
 
-@pytest.mark.parametrize("name", ["../outside.md", "/tmp/outside.md", "missing.md", "code.py"])
-def test_refuse_non_factory_markdown(apply_server, factory, name):
+@pytest.mark.parametrize("name", ["../outside.md", "/tmp/outside.md", "missing.md", "code.py",
+                                  "src/other/runner.py", "tests/test_runner.py", "src/sf/missing.py",
+                                  "src/sf/../outside.py"])
+def test_refuse_ineligible_improvement_file(apply_server, factory, name):
     (factory / "improvements.jsonl").write_text(json.dumps(IDEA | {"file": name}) + "\n")
     assert request(apply_server)[0] == 409
     assert not (factory / "runs" / ".lock").exists()
@@ -225,3 +238,125 @@ def test_log_updates_preserve_concurrent_records(factory):
     for thread in threads:
         thread.join()
     assert [i["application"]["status"] for i in load_decisions(factory)] == ["applied", "applied"]
+
+
+@pytest.mark.parametrize("name", ["src/sf/workflow.py", "src/sf/nested/runner.py"])
+def test_apply_runner_suggestion(apply_server, factory, fake_pi, name):
+    source = factory / name
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# Original runner\n")
+    (factory / "improvements.jsonl").write_text(json.dumps(IDEA | {"file": name}) + "\n")
+    script = fake_pi({"implementer": [{"text": '{"summary":"Runner fixed"}',
+                                      "write": {name: "# Fixed runner\n"}}]})
+    before = sh(factory, "git", "rev-parse", "HEAD")
+    assert request(apply_server)[0] == 202
+    assert finished(factory)["status"] == "applied"
+    assert source.read_text() == "# Fixed runner\n"
+    assert calls(script)[0]["cwd"] == str(factory)
+    assert name in calls(script)[0]["message"]
+    assert sh(factory, "git", "rev-parse", "HEAD") != before
+    assert not sh(factory, "git", "status", "--porcelain")
+
+
+@pytest.mark.parametrize("kind", ["symlink", "parent-symlink", "ignored"])
+def test_apply_refuses_unsafe_or_ignored_runner_source(apply_server, factory, tmp_path, kind):
+    source = factory / "src/sf/runner.py"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "runner.py").write_text("# Outside runner\n")
+    if kind == "symlink":
+        source.symlink_to(outside / "runner.py")
+    elif kind == "parent-symlink":
+        source.parent.rmdir()
+        source.parent.symlink_to(outside, target_is_directory=True)
+    else:
+        source.write_text("# Ignored runner\n")
+        with (factory / ".gitignore").open("a") as ignore:
+            ignore.write("src/sf/runner.py\n")
+    (factory / "improvements.jsonl").write_text(json.dumps(IDEA | {"file": "src/sf/runner.py"}) + "\n")
+    assert request(apply_server)[0] == 409
+    assert (outside / "runner.py").read_text() == "# Outside runner\n"
+    assert not (factory / "runs/.lock").exists()
+
+
+def test_success_commits_staged_untracked_and_deleted_files(apply_server, factory, fake_pi):
+    (factory / "staged.txt").write_text("Already staged\n")
+    sh(factory, "git", "add", "staged.txt")
+    (factory / "untracked.txt").write_text("Existing untracked\n")
+    (factory / "README.md").unlink()
+    fake_pi({"implementer": [{"text": '{"summary":"Done"}'}]})
+    before = sh(factory, "git", "rev-parse", "HEAD").strip()
+    branch = sh(factory, "git", "branch", "--show-current")
+    assert request(apply_server)[0] == 202
+    result = finished(factory)
+    assert result["status"] == "applied"
+    assert sh(factory, "git", "rev-parse", "HEAD^").strip() == before
+    assert sh(factory, "git", "show", "HEAD:staged.txt") == "Already staged\n"
+    assert sh(factory, "git", "show", "HEAD:untracked.txt") == "Existing untracked\n"
+    assert "README.md" not in sh(factory, "git", "ls-tree", "--name-only", "HEAD").splitlines()
+    assert sh(factory, "git", "branch", "--show-current") == branch
+    assert not sh(factory, "git", "status", "--porcelain")
+
+
+def test_commit_failure_is_retryable_without_success_signal(apply_server, factory, fake_pi):
+    hook = factory / ".git/hooks/pre-commit"
+    hook.write_text("#!/bin/sh\necho 'commit rejected' >&2\nexit 1\n")
+    hook.chmod(0o755)
+    fake_pi({"implementer": [{"text": '{"summary":"Done"}', "write": {"partial.py": "partial"}}]})
+    before = sh(factory, "git", "rev-parse", "HEAD")
+    assert request(apply_server)[0] == 202
+    result = finished(factory)
+    assert result["status"] == "failed" and "commit rejected" in result["error"]
+    assert sh(factory, "git", "rev-parse", "HEAD") == before
+    assert (factory / "partial.py").read_text() == "partial"
+    run = Run.load(factory, result["run_id"])
+    assert run.state.status == "failed"
+    assert "commit" not in run.state.results
+    assert "application_applied" not in (run.dir / "events.jsonl").read_text()
+    hook.unlink()
+    assert request(apply_server)[0] == 202
+    assert finished(factory)["status"] == "applied"
+    assert not sh(factory, "git", "status", "--porcelain")
+
+
+def test_ignored_history_and_no_changes_do_not_create_empty_commit(apply_server, factory, fake_pi):
+    with (factory / ".gitignore").open("a") as ignore:
+        ignore.write("improvements.jsonl\n")
+    sh(factory, "git", "add", ".gitignore")
+    sh(factory, "git", "commit", "-qm", "Ignore local history")
+    before = sh(factory, "git", "rev-parse", "HEAD")
+    fake_pi({"implementer": [{"text": '{"summary":"Already satisfied"}'}]})
+    assert request(apply_server)[0] == 202
+    result = finished(factory)
+    assert result["status"] == "applied"
+    assert sh(factory, "git", "rev-parse", "HEAD") == before
+    assert Run.load(factory, result["run_id"]).state.results["commit"] == "No changes to commit"
+
+
+
+def test_success_is_not_visible_until_commit_succeeds(apply_server, factory, fake_pi, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_commit(*args):
+        entered.set()
+        assert release.wait(5)
+        raise g.GitError("Commit rejected after waiting")
+
+    monkeypatch.setattr("sf.improve.g.commit_all", blocked_commit)
+    fake_pi({"implementer": [{"text": '{"summary":"Done"}'}]})
+    assert request(apply_server)[0] == 202
+    try:
+        assert entered.wait(5)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            reader = pool.submit(load_decisions, factory)
+            try:
+                with pytest.raises(TimeoutError):
+                    reader.result(timeout=.1)
+            finally:
+                release.set()
+            observed = reader.result(timeout=5)[0]["application"]["status"]
+            assert observed in ("running", "failed")
+    finally:
+        release.set()
+    assert finished(factory)["status"] == "failed"

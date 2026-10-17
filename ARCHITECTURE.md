@@ -68,7 +68,9 @@ their existing interfaces. Templates are loaded for each new invocation.
 
 The improver is read-only: it proposes evidence-backed changes and the improve stage records every
 suggestion that survives historical rejection filtering. A human can edit a suggestion manually or click
-play in config to invoke the configured implementer against software-factory. The implementer may change
+play in config to invoke the configured implementer against software-factory. The improver can also
+inspect and propose fixes to existing Python runner modules under `src/sf/`, citing run evidence and
+source locations, expected behavior and a focused regression test. The implementer may change
 related factory files and follows repository validation guidance. Shared-prompt portability remains the
 judgement of the person choosing to apply the suggestion.
 
@@ -116,11 +118,12 @@ lock in `runs/.improvements.lock`; rewrites replace the log atomically. This coo
 and CLI improve writers without locking a log inode that replacement would invalidate. Running suggestions
 and their execution runs cannot be deleted.
 
-Each recorded idea carries `file`, the one Markdown file it changes. The improver's contract requires a
-repository-relative `.md` path with no absolute or `..` segment, which is the guarantee the dashboard's
-apply action relies on. The apply service checks that this is an existing file in the factory Markdown
-inventory, rejecting paths outside software-factory. The improve stage still touches neither repository
-except for recording the suggestions log.
+Each recorded idea carries `file`, its primary change target. The improver's contract accepts a
+repository-relative `.md` document or a `.py` module under `src/sf/`, with no absolute or `..`
+segment. The apply service requires an existing factory document from the Markdown inventory or an
+existing tracked/non-ignored Python module under `src/sf/`. Symlinks and paths resolving outside
+software-factory are rejected; target application Python files remain outside this scope. The improve
+stage still touches neither repository except for recording the suggestions log.
 
 Improvement selection never calls the Human protocol. That protocol now covers only optional plan
 approval and loop-cap choices. Historical human decisions remain readable and no decision history is
@@ -143,25 +146,41 @@ return 400, missing records return 404, and busy/already-running/already-applied
 The service takes `RunLock` before accepting work and transfers responsibility for releasing it to a
 background worker. The worker invokes only the configured implementer through the existing runner and
 task template, with the factory as both working directory and documentation source. It then runs any
-configured factory validation commands. It neither branches, commits, reviews, merges nor generates new
-suggestions. Existing edits are allowed and the prompt requires their preservation.
+configured factory validation commands. On success the orchestrator commits all factory working-tree
+changes, including pre-existing edits, staged changes, additions, deletions and applied metadata, on the
+current branch. It does not branch, push, review, merge or generate new suggestions. Existing edits are
+allowed and the implementer must preserve them and leave committing to the orchestrator.
 
 Each attempt has a `kind: improvement` run containing prompt/plan artifacts, harness output, events,
 usage, validation logs and state. The run dashboard shows only the implement stage for these runs.
+The resulting commit SHA is recorded in `results.commit` and a `git_commit` event; it stays in ignored
+run artifacts rather than introducing a self-reference in the committed improvements log. The commit
+message names the execution run and suggestion. If no non-ignored changes exist, no empty commit is
+created and diagnostics say `No changes to commit`.
 `sf resume` refuses them; retrying from config creates a new attempt with current agent settings.
 Application metadata retains run ID, status (`running`, `applied`, `failed`), owner PID, timestamps and
 summary/error alongside the original suggestion. Config polls active attempts and keeps expanded rows.
 Mutation requests invalidate older polls so stale responses cannot restore a deleted entry or old status.
-Successful play buttons stay disabled; failed attempts allow retry. Startup marks attempts owned by a
-dead server process failed and updates their run state. History retains successful status even if a
+Runner-code suggestions are derived from `file` paths under `src/sf/` ending in `.py`; their config
+summary is red and includes a Python runner label. Historical Markdown suggestions keep their styling,
+and no new log field is required. Successful play buttons stay disabled; failed attempts allow retry.
+Startup marks attempts owned by a dead server process failed and updates their run state. History retains successful status even if a
 finished execution's diagnostics are subsequently deleted.
 
+Successful application metadata and the Git commit share the improvements-log lock: API readers
+cannot observe an applied result until the commit succeeds. A failed Git commit restores the previous
+application metadata before releasing that lock; the worker then records a retryable failure. Agent
+and validation failures never reach the commit. No success event is emitted on commit failure.
+
 The worker is intentionally hosted in the dashboard process, avoiding another execution command and
-queue. Failures preserve partial working-tree changes rather than reverting edits that may belong to
-the user. An abrupt server termination can also interrupt execution; inspect partial changes and any
+queue. Failures preserve partial staged and working-tree changes rather than reverting edits that may
+belong to the user. An abrupt server termination can also interrupt execution; inspect partial changes and any
 remaining harness process before retrying. File-scope and preservation instructions are agent obligations,
-not a filesystem sandbox. Contract-valid completion plus successful configured validation determines an
-applied result; when no commands are configured the agent's validation evidence remains in its output.
+not a filesystem sandbox. Contract-valid completion, successful configured validation and a successful
+commit (or nothing to commit) determine an applied result; when no commands are configured the agent's
+validation evidence remains in its output.
+Prompt changes load at the next agent invocation; Python code changes require restarting long-running
+`sf watch` and dashboard processes after execution finishes.
 
 ## Dashboard project documents
 

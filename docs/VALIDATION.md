@@ -5,6 +5,16 @@ Validation rules for coding agents. This file defines how an implemented change 
 > `AGENTS.md` defines **how agents engineer changes**.  
 > `VALIDATION.md` defines **how agents prove those changes are correct**.
 
+## Repository checks
+
+Run the existing development checks from the repository root. These commands also register
+this repository's tests and lint with the factory's default validation-command source.
+
+```sh
+uv run pytest -q
+uv run ruff check src tests
+```
+
 ## Core Rule
 
 **Implementation is not evidence. A change is complete only when the applicable validation demonstrates that the requested outcome was achieved without unacceptable regressions.**

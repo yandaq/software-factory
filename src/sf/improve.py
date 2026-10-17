@@ -6,6 +6,7 @@ from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from sf import git as g
 from sf.run import now
 
 if TYPE_CHECKING:
@@ -40,7 +41,13 @@ def _replace_log(path: Path, lines: list[str]) -> None:
 
 
 @_serialized
-def update_application(factory: Path, identity: tuple[str, str, str], application: dict[str, Any]) -> None:
+def update_application(factory: Path, identity: tuple[str, str, str], application: dict[str, Any],
+                       *, commit_message: str | None = None) -> str | None:
+    """Persist a result, optionally committing all changes before readers can observe success.
+
+    A failed commit restores the previous result under the same log lock; the caller then records
+    the execution failure. The SHA belongs in ignored run diagnostics, not in its own committed log.
+    """
     path = factory / IMPROVEMENTS
     lines = path.read_text().splitlines()
     for n, line in enumerate(lines):
@@ -51,7 +58,15 @@ def update_application(factory: Path, identity: tuple[str, str, str], applicatio
             record["application"] = application
             lines[n] = json.dumps(record, ensure_ascii=False)
             _replace_log(path, lines)
-            return
+            if commit_message is not None:
+                try:
+                    if g.commit_all(factory, commit_message):
+                        return g.git(factory, "rev-parse", "HEAD").strip()
+                except g.GitError:
+                    lines[n] = line
+                    _replace_log(path, lines)
+                    raise
+            return None
     raise FileNotFoundError("That improvement is no longer in the log.")
 
 

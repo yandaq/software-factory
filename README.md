@@ -91,7 +91,7 @@ Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, 
 | `agents/<name>.md` | Agent definitions: YAML frontmatter (harness, model, thinking, tools, JSON Schema contract) + role prompt |
 | `templates/` | Starter `docs/coding-standards.md`, `docs/architecture.md` and `.gitignore` for targets that lack them (`AGENTS.md` and `docs/VALIDATION.md` are downloaded from [agents-default](https://github.com/yandaq/agents-default)) |
 | `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `<harness>-<stage>-<n>.stderr` / `.jsonl`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`, `retro.log` |
-| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes, and delete any one entry from that list. Play invokes the configured implementer against software-factory, leaving changes uncommitted. Suggestions retain applied/failed status and execution diagnostics; failures can be retried. |
+| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes, and delete any one entry from that list. Play invokes the configured implementer against software-factory and commits all changes after success. Suggestions retain applied/failed status and execution diagnostics; failures can be retried. |
 | `src/sf/` | Orchestrator (see [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ## Target configuration
@@ -115,10 +115,18 @@ uv run ruff check src tests
 `SF_PI`, `SF_CLAUDE`, and `SF_CODEX` override the corresponding CLI binary paths.
 
 Agent tuning covers both persistent role instructions and task wording. The dashboard
-provides separate Markdown links for each. The improver proposes evidence-backed changes to either layer
-and records them in `improvements.jsonl`. On config, play beside delete runs the configured implementer
+provides separate Markdown links for each. The improver studies run evidence, generated target code
+and relevant software-factory source, and proposes changes to either prompt layer, existing target
+documentation or Python runner modules under `src/sf/`. Runner proposals must describe the expected
+behavior and a focused regression test. Suggestions are recorded in `improvements.jsonl`. On config, play beside delete runs the configured implementer
 against software-factory. Existing edits are allowed and must be preserved; related factory files may be
-changed and changes remain uncommitted. The named Markdown file must exist in software-factory.
+changed. After the implementation and configured validation succeed, the dashboard commits all factory
+working-tree changes, including pre-existing edits, additions and deletions, on the current branch.
+The commit includes the applied suggestion metadata and is not pushed. Agent, validation or commit
+failures remain retryable and leave changes uncommitted. The named file must be an existing factory
+Markdown document or Python module under `src/sf/`. Runner suggestions appear in red with a **Python runner** label in
+the config list. After applying Python changes, restart long-running `sf watch` and `sf dashboard`
+processes to load them; prompt changes are picked up on the next agent invocation.
 The row shows progress, a result and execution diagnostics; applied suggestions cannot be replayed, while
 failures can be retried after inspecting partial changes. Only one factory run or application executes
 at a time. Config edits can also still be made manually. Missing or invalid task templates fail visibly,

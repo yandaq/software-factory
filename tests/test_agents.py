@@ -78,6 +78,34 @@ def test_invalid_task_template(text, reason):
         validate_task_template("planner", text)
 
 
+def test_reviewer_task_requires_current_documentation_review():
+    from sf.agents import render_task
+
+    text = render_task(ROOT / "agents", "reviewer", {
+        "plan": "The full plan",
+        "trunk": "main",
+        "documentation": "Target documentation inventory",
+    })
+    assert text.startswith(
+        "Review the work against the full plan, applicable repository contracts, and affected "
+        "documentation—not only coding standards. If your tools include a shell, inspect "
+        "`git diff main...HEAD`; otherwise review the repository as it stands on this branch. "
+        "Before approving, read the current architecture and validation guidance and the "
+        "usage/interface documentation affected by the planned behavior. Verify their relevant "
+        "statements against the implementation; a plan's description of a document is not evidence "
+        "of its current contents. Do not defer this accuracy check merely because a later "
+        "documentation stage exists."
+    )
+    assert text.endswith(
+        "\n\n# Plan\n\nThe full plan\n\n# Available target documentation\n\n"
+        "Target documentation inventory\n\n"
+        "Inspect this inventory and read documents relevant to this task, including applicable "
+        "component-local guidance and relevant document references. Distinguish governing "
+        "requirements, descriptive documentation and historical records; apply local instructions "
+        "only within their intended scope.\n"
+    )
+
+
 def test_missing_task_template_and_context(tmp_path):
     from sf.agents import load_task_template, render_task
 

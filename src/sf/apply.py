@@ -54,14 +54,22 @@ def start_application(factory: Path, identity: tuple[str, str, str]) -> str:
             raise ApplyRefused("That improvement is already running or applied.")
         name = idea.get("file", "")
         path = PurePosixPath(name)
+        source = factory / name
+        runner_source = (
+            path.is_relative_to("src/sf") and path.suffix == ".py"
+            and not source.is_symlink() and source.is_file()
+            and source.resolve().is_relative_to(factory.resolve())
+            and name in g.git(factory, "ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")
+        )
         if (not name or path.is_absolute() or ".." in path.parts
-                or path.suffix.lower() != ".md" or name not in discover_documentation(factory)):
-            raise ApplyRefused("The suggestion must name an existing Markdown file in software-factory.")
+                or (not runner_source and name not in discover_documentation(factory))):
+            raise ApplyRefused("The suggestion must name an existing factory Markdown file or Python module under src/sf/.")
         # Validate configuration before accepting a job; each retry reads the latest settings.
         agent = load_agent(factory / "agents", "implementer")
         plan = (
             "Apply this one recorded improvement to software-factory, the current repository.\n"
-            "Inspect and preserve all existing uncommitted edits. Leave your changes uncommitted.\n"
+            "Inspect and preserve all existing uncommitted edits. Do not commit; after validation, the dashboard\n"
+            "will commit all factory working-tree changes, including existing edits, on the current branch.\n"
             "Change only what is needed for this suggestion, including related code, tests and docs.\n"
             "Follow repository validation guidance and report the checks and their results.\n"
             "Do not modify improvements.jsonl or execution state; the dashboard owns those files.\n\n"
@@ -95,16 +103,19 @@ def start_application(factory: Path, identity: tuple[str, str, str]) -> str:
 
 def _finish(run: Run, identity: tuple[str, str, str], application: dict[str, Any],
             summary: str = "", error: str | None = None) -> None:
+    message = f"sf {run.state.run_id}: apply improvement — {identity[2]}"
+    commit = update_application(run.factory, identity, application | {
+        "status": "failed" if error else "applied", "summary": summary,
+        "error": error, "finished_at": now(),
+    }, commit_message=message if not error else None)
     run.state.status = "failed" if error else "done"
     run.state.results["implement"] = error or summary
     if not error:
         run.state.completed = ["implement"]
+        run.state.results["commit"] = commit or "No changes to commit"
+        run.log("git_commit" if commit else "git_commit_skipped", repo="factory", commit=commit, message=message)
     run.log("application_failed" if error else "application_applied", summary=summary, error=error)
     run.save()
-    update_application(run.factory, identity, application | {
-        "status": "failed" if error else "applied", "summary": summary,
-        "error": error, "finished_at": now(),
-    })
 
 
 def _apply(run: Run, identity: tuple[str, str, str], application: dict[str, Any],

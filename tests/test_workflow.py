@@ -236,8 +236,10 @@ def test_improve_records_suggestions_without_applying_them(factory, target, fake
     assert sh(target, "git", "log", "-1", "main", "--format=%s").strip() == f"sf {run.state.run_id}: merge sf/{run.state.run_id}"
 
 
-@pytest.mark.parametrize("file", [None, "/factory/agents/reviewer.md", "../outside.md", "agents/reviewer.txt"])
-def test_recorded_idea_must_name_one_relative_markdown_file(factory, target, fake_pi, file):
+@pytest.mark.parametrize("file", [None, "/factory/agents/reviewer.md", "../outside.md", "agents/reviewer.txt",
+                                  "app.py", "tests/test_runner.py", "src/other/runner.py",
+                                  "src/sf/../outside.py"])
+def test_recorded_idea_must_name_one_relative_document_or_runner_file(factory, target, fake_pi, file):
     """The dashboard applies an idea to the file it names, so the contract keeps that path usable."""
     idea = {k: v for k, v in IDEA.items() if k != "file"}
     if file is not None:
@@ -436,3 +438,20 @@ def test_documentation_inventory_pinned_for_contract_retry(factory, target, fake
     assert "corrected JSON object" in messages[1]
 
 
+
+
+@pytest.mark.parametrize("name", ["src/sf/workflow.py", "src/sf/nested/runner.py"])
+def test_improver_can_record_runner_changes_without_applying(factory, target, fake_pi, name):
+    source = factory / name
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# Existing runner\n")
+    idea = IDEA | {"file": name, "title": "Fix runner validation"}
+    invocation = fake_pi(script(improver=[{"text": json.dumps({"ideas": [idea]})}]))
+    run, wf = start(factory, target)
+    wf.execute()
+    assert load_decisions(factory)[0]["file"] == name
+    assert source.read_text() == "# Existing runner\n"
+    assert run.state.results["improve"] == "1 improvements recorded"
+    improver_call = next(c for c in calls(invocation) if c["agent"] == "improver")
+    assert improver_call["cwd"] == str(factory)
+    assert "src/sf/" in improver_call["message"]
