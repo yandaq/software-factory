@@ -1,5 +1,6 @@
-"""Target-repo settings (`.sf.toml`), standards files and validation commands."""
+"""Target-repo settings (`.sf.toml`), standards files, generated-file hygiene and validation commands."""
 
+import os
 import re
 import shutil
 import subprocess
@@ -15,7 +16,17 @@ VALIDATION_FILE = "docs/VALIDATION.md"
 STANDARDS_FILES = ("AGENTS.md", VALIDATION_FILE, "docs/coding-standards.md", "docs/architecture.md")
 DEFAULTS_URL = "https://raw.githubusercontent.com/yandaq/agents-default/main"
 DOWNLOADED = {"AGENTS.md": f"{DEFAULTS_URL}/AGENTS.md", VALIDATION_FILE: f"{DEFAULTS_URL}/VALIDATION.md"}
-TEMPLATED = {"docs/coding-standards.md": "coding-standards.md", "docs/architecture.md": "architecture.md"}
+# `.gitignore` is installed for working-tree hygiene, not documentation: agents and validation commands
+# run inside the target and leave generated files behind, and an ignored file is invisible to the
+# `git status` checks that police agent scope. It is deliberately absent from STANDARDS_FILES.
+TEMPLATED = {
+    "docs/coding-standards.md": "coding-standards.md",
+    "docs/architecture.md": "architecture.md",
+    ".gitignore": "gitignore",
+}
+
+# Keeps caches out of the target even when it already has its own, possibly incomplete, `.gitignore`.
+NO_REPO_ARTIFACTS = {"PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:cacheprovider"}
 
 
 class TargetConfig(BaseModel):
@@ -115,7 +126,8 @@ def run_validation(target: Path, commands: list[str], log_path: Path) -> bool:
     ok = True
     with log_path.open("w") as log:
         for cmd in commands:
-            proc = subprocess.run(cmd, shell=True, cwd=target, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, shell=True, cwd=target, capture_output=True, text=True, check=False,
+                          env={**os.environ, **NO_REPO_ARTIFACTS})
             log.write(f"$ {cmd}\n{proc.stdout}{proc.stderr}[exit {proc.returncode}]\n\n")
             if proc.returncode != 0:
                 ok = False

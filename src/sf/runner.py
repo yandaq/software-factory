@@ -1,6 +1,7 @@
 """Harness-neutral invocation lifecycle, subprocess streaming and JSON contracts."""
 
 import json
+import os
 import subprocess
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -11,6 +12,7 @@ from jsonschema import Draft202012Validator
 
 from sf.agents import AgentDefinition
 from sf.run import Invocation, Run
+from sf.target import NO_REPO_ARTIFACTS
 
 MAX_CONTRACT_RETRIES = 2
 
@@ -41,7 +43,8 @@ def stream_process(run: Run, inv: Invocation, cmd: list[str], cwd: Path, message
         (run.dir / f"{prefix}.stderr").open("a") as stderr,
         (run.dir / f"{prefix}.jsonl").open("ab") as native,
     ):
-        proc = subprocess.Popen(cmd, cwd=cwd, stdin=stdin, stdout=subprocess.PIPE, stderr=stderr)
+        proc = subprocess.Popen(cmd, cwd=cwd, stdin=stdin, stdout=subprocess.PIPE, stderr=stderr,
+                                env={**os.environ, **NO_REPO_ARTIFACTS})
         assert proc.stdout is not None
         try:
             for raw in proc.stdout:

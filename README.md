@@ -89,9 +89,9 @@ Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, 
 |---|---|
 | `agents/<name>.user.md` | Editable task templates with fixed context placeholders; see [agents/README.md](agents/README.md) |
 | `agents/<name>.md` | Agent definitions: YAML frontmatter (harness, model, thinking, tools, JSON Schema contract) + role prompt |
-| `templates/` | Starter `docs/coding-standards.md` and `docs/architecture.md` for targets that lack them (`AGENTS.md` and `docs/VALIDATION.md` are downloaded from [agents-default](https://github.com/yandaq/agents-default)) |
+| `templates/` | Starter `docs/coding-standards.md`, `docs/architecture.md` and `.gitignore` for targets that lack them (`AGENTS.md` and `docs/VALIDATION.md` are downloaded from [agents-default](https://github.com/yandaq/agents-default)) |
 | `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `<harness>-<stage>-<n>.stderr` / `.jsonl`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`, `retro.log` |
-| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes. A decision records what was proposed; applying it is a manual edit in the dashboard. |
+| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes, and delete any one entry from that list. A decision records what was proposed; applying it is a manual edit in the dashboard. |
 | `src/sf/` | Orchestrator (see [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ## Target configuration

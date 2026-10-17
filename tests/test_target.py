@@ -31,16 +31,27 @@ def test_run_validation_stops_at_first_failure(tmp_path):
     assert "[exit 3]" in text and "never" not in text
 
 
+def test_run_validation_leaves_no_artifacts_in_the_target(tmp_path):
+    import sys
+
+    (tmp_path / "helper.py").write_text("VALUE = 1\n")
+    log = tmp_path / "v.log"
+    commands = [f'"{sys.executable}" -c "import helper"', 'echo "$PYTEST_ADDOPTS"']
+    assert run_validation(tmp_path, commands, log)
+    assert not (tmp_path / "__pycache__").exists()
+    assert "no:cacheprovider" in log.read_text()
+
+
 def test_install_missing_standards_keeps_existing(tmp_path, no_network):
     templates = tmp_path / "t"
     templates.mkdir()
-    for n in ("coding-standards.md", "architecture.md"):
+    for n in ("coding-standards.md", "architecture.md", "gitignore"):
         (templates / n).write_text("template")
     target = tmp_path / "target"
     (target / "docs").mkdir(parents=True)
     (target / "docs" / "architecture.md").write_text("mine")
     installed = install_missing_standards(target, templates)
-    assert installed == ["AGENTS.md", "docs/VALIDATION.md", "docs/coding-standards.md"]
+    assert installed == ["AGENTS.md", "docs/VALIDATION.md", "docs/coding-standards.md", ".gitignore"]
     assert no_network == [
         "https://raw.githubusercontent.com/yandaq/agents-default/main/AGENTS.md",
         "https://raw.githubusercontent.com/yandaq/agents-default/main/VALIDATION.md",
@@ -49,10 +60,24 @@ def test_install_missing_standards_keeps_existing(tmp_path, no_network):
     assert (target / "docs" / "coding-standards.md").read_text() == "template"
     assert (target / "docs" / "architecture.md").read_text() == "mine"
     # Compare stored names rather than exists(): a case-insensitive filesystem resolves agents.md to AGENTS.md.
-    assert sorted(p.name for p in target.iterdir()) == ["AGENTS.md", "docs"]
+    assert sorted(p.name for p in target.iterdir()) == [".gitignore", "AGENTS.md", "docs"]
     assert sorted(p.name for p in (target / "docs").iterdir()) == [
         "VALIDATION.md", "architecture.md", "coding-standards.md",
     ]
+
+
+def test_install_missing_standards_keeps_an_existing_gitignore(tmp_path, no_network):
+    templates = tmp_path / "t"
+    templates.mkdir()
+    for n in ("coding-standards.md", "architecture.md", "gitignore"):
+        (templates / n).write_text("template")
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / ".gitignore").write_text("own-rules/\n")
+    assert install_missing_standards(target, templates) == [
+        "AGENTS.md", "docs/VALIDATION.md", "docs/coding-standards.md", "docs/architecture.md",
+    ]
+    assert (target / ".gitignore").read_text() == "own-rules/\n"
 
 
 def _repo(path, *branches):

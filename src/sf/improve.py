@@ -24,6 +24,31 @@ def record_decision(factory: Path, decision: dict[str, Any]) -> None:
         f.write(json.dumps(decision, ensure_ascii=False) + "\n")
 
 
+def delete_decision(factory: Path, ts: str, run_id: str, title: str) -> bool:
+    """Drop the first recorded suggestion matching ts, run_id and title, rewriting the log without it.
+
+    A record is named by what it says rather than by its position, so a page that is out of date cannot
+    delete someone else's entry. The surviving lines are copied verbatim: deleting one suggestion never
+    reformats the others.
+    """
+    path = factory / IMPROVEMENTS
+    if not path.exists():
+        return False
+    lines = [line for line in path.read_text().splitlines() if line.strip()]
+    keep: list[str] = []
+    deleted = False
+    for line in lines:
+        record = json.loads(line)  # a log the factory cannot parse must fail visibly, not be rewritten
+        fields = (record.get("ts"), record.get("run_id"), record.get("title")) if isinstance(record, dict) else None
+        if not deleted and fields == (ts, run_id, title):
+            deleted = True
+            continue
+        keep.append(line)
+    if deleted:
+        path.write_text("".join(f"{line}\n" for line in keep))
+    return deleted
+
+
 def _norm(title: str) -> str:
     return " ".join(title.lower().split())
 

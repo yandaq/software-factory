@@ -1,8 +1,8 @@
 ---
 name: documenter
 purpose: Reduce drift between implemented code and documentation
-model: halogen/halogen-qwen3.8-flash-next
-thinking: xhigh
+model: openai/gpt-5.6-terra
+thinking: low
 tools: [read, bash, edit, write, grep, find, ls]
 contract:
   type: object

@@ -10,7 +10,7 @@
 | `pi.py`, `claude.py`, `codex.py` | Native CLI invocation, session handling, success detection and event/usage normalization; `pi.py` retains original runner imports for compatibility |
 | `run.py` | `RunState` (Pydantic), `events.jsonl` emitter, token aggregation, `RunLock` |
 | `agents.py` | Agent definitions plus fixed-vocabulary task-template validation and literal rendering |
-| `target.py` | `.sf.toml`, starter standards, Git-based Markdown discovery, validation commands |
+| `target.py` | `.sf.toml`, starter standards and starter `.gitignore`, generated-file environment, Git-based Markdown discovery, validation commands |
 | `git.py` | git wrapper |
 | `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/`; settings controls edit frontmatter; Markdown editor edits role definitions and task templates; a run's retro starts the improve phase again in a child process |
 | `console.py` | Rich live display and terminal prompts (`TerminalHuman`) |
@@ -104,6 +104,14 @@ code and the run logs, drops ideas whose title was previously rejected (`idea_fi
 rest to `improvements.jsonl` with `decision: automatic` and an empty note, then commits only that file.
 Nothing is applied: applying a suggestion means editing the prompt or document it names in the dashboard,
 so the history records what was proposed, not what was done.
+
+A recorded suggestion can be dropped from that history. The `/config` list carries a delete action per
+entry, and `DELETE /api/improvements` identifies the record by its own `ts`, `run_id` and `title` rather
+than by position, so a page that is out of date cannot delete somebody else's entry: an identity that is
+no longer in the log is a 404 and nothing is rewritten. The surviving lines are rewritten verbatim and no
+commit is created, matching project-document deletion. The improve stage remains the log's only other
+writer and appends one line per suggestion at the end of a run, so a delete races that append only while a
+retro is recording its ideas.
 
 Each recorded idea carries `file`, the one Markdown file it changes. The improver's contract requires a
 repository-relative `.md` path with no absolute or `..` segment, which is the guarantee the dashboard's

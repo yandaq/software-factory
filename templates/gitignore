@@ -1,0 +1,12 @@
+# Build output, caches and machine noise: never commit these.
+# Installed by sf when the repository has no .gitignore of its own.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+build/
+dist/
+node_modules/
+.DS_Store

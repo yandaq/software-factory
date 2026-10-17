@@ -1,7 +1,8 @@
 """Local web dashboard over `runs/*/` (stdlib HTTP server, polled JSON API).
 
 Run artifacts are read-only apart from whole-run deletion and the log a retro writes; project Markdown and
-agent configuration are editable. A run's retro action starts the improve phase again in a child process.
+agent configuration are editable, and the improve log can lose a single suggestion on request. A run's retro
+action starts the improve phase again in a child process.
 """
 
 import json
@@ -30,7 +31,7 @@ from sf.agents import (
     parse_agent,
     validate_task_template,
 )
-from sf.improve import load_decisions
+from sf.improve import delete_decision, load_decisions
 from sf.models import list_native_models
 from sf.pi import pi_bin
 from sf.run import RunLock
@@ -319,6 +320,8 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
 
         def do_DELETE(self) -> None:
             parts = [p for p in self.path.split("?")[0].split("/") if p]
+            if parts == ["api", "improvements"]:
+                return self._delete_improvement()
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "document":
                 return self._delete_project_document(parts[2])
             if len(parts) == 3 and parts[:2] == ["api", "runs"] and delete_run(runs_dir, parts[2]):
@@ -360,6 +363,22 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
             else:
                 return self._json({"error": None})
             self._send(json.dumps({"error": error}).encode(), "application/json", status)
+
+        def _delete_improvement(self) -> None:
+            status = HTTPStatus.BAD_REQUEST
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                if not isinstance(body, dict) or any(not isinstance(body.get(k), str)
+                                                     for k in ("ts", "run_id", "title")):
+                    raise ValueError("ts, run_id and title must be strings")
+                status = HTTPStatus.INTERNAL_SERVER_ERROR
+                deleted = delete_decision(agents_dir.parent, body["ts"], body["run_id"], body["title"])
+            except (OSError, ValueError) as e:  # unreadable log, or a body that is not a JSON object
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", status)
+            if not deleted:
+                return self._send(json.dumps({"error": "That improvement is no longer in the log."}).encode(),
+                                  "application/json", HTTPStatus.NOT_FOUND)
+            self._json({"error": None})
 
         def _delete_project_document(self, run_id: str) -> None:
             status = HTTPStatus.BAD_REQUEST

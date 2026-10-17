@@ -12,7 +12,7 @@ A Python orchestrator that drives the Pi CLI coding agent through a fixed workfl
 - **Target repo**: the software being built. It is passed with `--target <path>`.
   - Optional `<target>/.sf.toml` holds per-target settings: `trunk` (default `main`) and validation overrides.
   - It contains `AGENTS.md` at the root; every other doc lives in `docs/`, including `docs/coding-standards.md`, `docs/architecture.md` and `docs/VALIDATION.md`.
-- If any standards file is missing from the target, the run adds it on the run branch: `AGENTS.md` and `docs/VALIDATION.md` are downloaded from https://github.com/yandaq/agents-default; `docs/coding-standards.md` and `docs/architecture.md` are copied from the factory's starter templates.
+- If any standards file is missing from the target, the run adds it on the run branch: `AGENTS.md` and `docs/VALIDATION.md` are downloaded from https://github.com/yandaq/agents-default; `docs/coding-standards.md`, `docs/architecture.md` and `.gitignore` are copied from the factory's starter templates. The starter `.gitignore` keeps build output from agents' verification runs out of the working tree, which the scope and commit steps treat as uncommitted changes; a target that already has a `.gitignore` keeps its own, and agent and validation subprocesses additionally run with `PYTHONDONTWRITEBYTECODE=1` and `PYTEST_ADDOPTS=-p no:cacheprovider` so Python never drops caches there.
 
 ## 2. Stack
 

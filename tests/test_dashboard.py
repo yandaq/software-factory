@@ -179,11 +179,68 @@ def test_improvement_history(server, tmp_path):
     assert path.read_text().count("\n") == 2
     page = get(server + "/config")
     assert page.index('id="agents"') < page.index('id="improvements"')
+    assert 'title="Delete this improvement"' in page
     path.write_text("{broken\n")
     with pytest.raises(urllib.error.HTTPError) as error:
         get(server + "/api/improvements")
     assert error.value.code == 500
     assert "Cannot read improvement log" in json.loads(error.value.read())["error"]
+
+
+def delete_improvement(url, body):
+    req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"},
+                                 method="DELETE")
+    with urllib.request.urlopen(req) as response:
+        return json.loads(response.read())
+
+
+def test_improvement_delete_removes_one_record(server, tmp_path):
+    records = [{"ts": "2026-01-01T00:00:00+00:00", "run_id": "r1", "title": "First", "decision": "automatic"},
+               {"ts": "2026-01-02T00:00:00+00:00", "run_id": "r2", "title": "Second", "decision": "automatic"}]
+    path = tmp_path / "improvements.jsonl"
+    path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    assert delete_improvement(server + "/api/improvements", records[1]) == {"error": None}
+    assert [json.loads(line) for line in path.read_text().splitlines()] == [records[0]]
+    assert json.loads(get(server + "/api/improvements")) == [records[0]]
+
+
+@pytest.mark.parametrize("body", [{}, [], {"title": "First"}, {"ts": "t", "run_id": "r", "title": 1},
+                                  {"ts": "t", "run_id": "r", "title": None}])
+def test_improvement_delete_rejects_malformed_body(server, tmp_path, body):
+    path = tmp_path / "improvements.jsonl"
+    path.write_text('{"ts": "t", "run_id": "r", "title": "First"}\n')
+    with pytest.raises(urllib.error.HTTPError) as error:
+        delete_improvement(server + "/api/improvements", body)
+    assert error.value.code == 400
+    assert path.read_text().count("\n") == 1
+
+
+def test_improvement_delete_reports_a_record_that_is_already_gone(server, tmp_path):
+    path = tmp_path / "improvements.jsonl"
+    path.write_text('{"ts": "t", "run_id": "r", "title": "First"}\n')
+    for missing in ({"ts": "t", "run_id": "r", "title": "Gone"}, {"ts": "t", "run_id": "r2", "title": "First"}):
+        with pytest.raises(urllib.error.HTTPError) as error:
+            delete_improvement(server + "/api/improvements", missing)
+        assert error.value.code == 404
+        assert path.read_text().count("\n") == 1
+    path.unlink()
+    with pytest.raises(urllib.error.HTTPError) as error:
+        delete_improvement(server + "/api/improvements", {"ts": "t", "run_id": "r", "title": "First"})
+    assert error.value.code == 404
+
+
+def test_improvement_delete_refuses_to_rewrite_an_unreadable_log(server, tmp_path):
+    path = tmp_path / "improvements.jsonl"
+    path.write_text("{broken\n")
+    with pytest.raises(urllib.error.HTTPError) as error:
+        delete_improvement(server + "/api/improvements", {"ts": "t", "run_id": "r", "title": "First"})
+    assert error.value.code == 500
+    assert path.read_text() == "{broken\n"
+    path.write_text("[1, 2]\n")  # parses, but a line that is not a suggestion can never be the named one
+    with pytest.raises(urllib.error.HTTPError) as error:
+        delete_improvement(server + "/api/improvements", {"ts": "t", "run_id": "r", "title": "First"})
+    assert error.value.code == 404
+    assert path.read_text() == "[1, 2]\n"
 
 
 def test_config_update_rewrites_only_frontmatter_lines(server, tmp_path):

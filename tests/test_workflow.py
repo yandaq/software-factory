@@ -367,6 +367,21 @@ def test_documenter_rejects_code_config_and_new_root_docs(factory, target, fake_
         assert not (target / path).exists()
 
 
+def test_build_artifacts_left_by_the_documenter_are_not_out_of_scope(factory, target, fake_pi):
+    """Running the target's tests drops `__pycache__` in it; the installed .gitignore keeps that harmless."""
+    fake_pi(
+        script(
+            documenter=[
+                {"text": '{"summary": "s"}', "write": {"__pycache__/test_app.cpython-314.pyc": "junk"}}
+            ]
+        )
+    )
+    run, wf = start(factory, target)
+    wf.execute()
+    assert run.state.status == "done"
+    assert not [p for p in sh(target, "git", "ls-files").splitlines() if "__pycache__" in p]
+
+
 def test_all_agents_receive_target_documentation_inventory(factory, target, fake_pi):
     (target / "DESIGN.md").write_text("# Design\n")
     sh(target, "git", "add", "DESIGN.md")

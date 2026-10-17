@@ -25,6 +25,9 @@ section + section { margin-top: 16px; }
 #improvements h2 { margin-top: 0; font-size: 18px; }
 .improvement { border-top: 1px solid var(--line); padding: 12px 0; overflow-wrap: anywhere; }
 .improvement summary { cursor: pointer; font-weight: 600; }
+.improvement .del { float: right; margin-left: 12px; border: 0; background: none; color: var(--muted);
+  padding: 0 4px; border-radius: 4px; }
+.improvement .del:hover { color: var(--bad); }
 .improvement p { white-space: pre-wrap; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -65,6 +68,7 @@ textarea { width: 100%; height: 60vh; resize: vertical; font: 13px/1.5 var(--mon
     <h2 id="improvements-title">Improvements log</h2>
     <p class="muted">Historical improvement decisions, newest first. A decision records what the improve stage proposed; ideas are applied by editing the prompts on this page.</p>
     <div id="improvements-list" role="status">Loading…</div>
+    <p id="improvements-status" class="msg" role="status"></p>
   </section>
 </main>
 <dialog id="editor" aria-labelledby="editor-title">
@@ -84,7 +88,9 @@ async function loadImprovements() {
   const entries = await r.json();
   if (!r.ok) throw new Error(entries.error || `HTTP ${r.status}`);
   document.getElementById("improvements-list").innerHTML = entries.length ? entries.map(i =>
-    `<details class="improvement"><summary>${esc(i.title)}</summary>
+    `<details class="improvement"><summary><button class="del" title="Delete this improvement"
+        aria-label="Delete improvement" data-ts="${esc(i.ts)}" data-run="${esc(i.run_id)}"
+        data-title="${esc(i.title)}">🗑</button>${esc(i.title)}</summary>
       <p class="muted">${esc(i.ts)} · Run ${esc(i.run_id)} · Decision: ${esc(i.decision)}</p>
       ${[ ["Rationale", i.rationale], ["Evidence", i.evidence], ["File", i.file],
           ["Proposed change", i.proposed_change],
@@ -92,6 +98,37 @@ async function loadImprovements() {
         `<p><strong>${label}</strong><br>${esc(value)}</p>`).join("")}</details>`).join("")
     : '<p class="muted">No improvements recorded yet.</p>';
 }
+
+// Deleting a suggestion rewrites improvements.jsonl server-side; the entry is named by ts, run and title.
+async function deleteImprovement(button) {
+  const entry = {ts: button.dataset.ts, run_id: button.dataset.run, title: button.dataset.title};
+  if (!confirm(`Delete "${entry.title}" from the improvements log? This cannot be undone.`)) return;
+  const status = document.getElementById("improvements-status");
+  button.disabled = true;
+  try {
+    const r = await fetch("/api/improvements", {
+      method: "DELETE", headers: {"Content-Type": "application/json"}, body: JSON.stringify(entry),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `delete improvement: HTTP ${r.status}`);
+    button.closest("details").remove();
+    if (!document.querySelector("#improvements-list .improvement")) {
+      document.getElementById("improvements-list").innerHTML = '<p class="muted">No improvements recorded yet.</p>';
+    }
+    status.className = "msg ok"; status.textContent = `Deleted ${entry.title}`;
+  } catch (err) {
+    console.error("improvement delete failed", entry.title, err);
+    button.disabled = false;
+    status.className = "msg err"; status.textContent = err.message;
+  }
+}
+
+document.addEventListener("click", e => {
+  const button = e.target.closest("#improvements .del");
+  if (!button) return;
+  e.preventDefault();  // the button sits inside a <summary>: delete must not toggle the entry
+  void deleteImprovement(button);
+});
 
 function settings(row, harness, model, thinking) {
   const cfg = harnesses[harness];
