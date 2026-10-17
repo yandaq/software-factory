@@ -7,6 +7,10 @@ from pydantic import ValidationError
 from sf.agents import AGENT_NAMES, load_agent, parse_agent
 
 ROOT = Path(__file__).resolve().parent.parent
+AGENT_TEXT = (
+    "---\nname: x\npurpose: p\nmodel: m\nthinking: xhigh\nharness: pi\n"
+    "tools: []\ncontract: {}\n---\nbody"
+)
 
 
 @pytest.mark.parametrize("name", AGENT_NAMES)
@@ -33,19 +37,19 @@ def test_invalid_thinking_rejected():
 
 
 def test_legacy_agent_defaults_to_pi():
-    assert load_agent(ROOT / "agents", "planner").harness == "pi"
+    assert parse_agent(AGENT_TEXT.replace("harness: pi\n", "")).harness == "pi"
 
 
 @pytest.mark.parametrize("harness", ["claude-code", "codex"])
 def test_harness_effort_validation(harness):
-    text = (ROOT / "agents" / "planner.md").read_text().replace("harness: pi", f"harness: {harness}", 1)
+    text = AGENT_TEXT.replace("harness: pi", f"harness: {harness}", 1)
     assert parse_agent(text).harness == harness
     with pytest.raises(ValidationError, match="unsupported"):
         parse_agent(text.replace("thinking: xhigh", "thinking: max", 1))
 
 
 def test_invalid_harness_rejected():
-    text = (ROOT / "agents" / "planner.md").read_text().replace("harness: pi", "harness: unknown", 1)
+    text = AGENT_TEXT.replace("harness: pi", "harness: unknown", 1)
     with pytest.raises(ValidationError):
         parse_agent(text)
 

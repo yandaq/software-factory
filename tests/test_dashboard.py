@@ -8,8 +8,9 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+import yaml
 
-from sf.agents import load_agent
+from sf.agents import AGENT_NAMES, load_agent
 from sf.dashboard import serve
 from sf.run import Run, RunState
 
@@ -19,6 +20,12 @@ ROOT = Path(__file__).parent.parent
 @pytest.fixture
 def server(tmp_path, monkeypatch):
     shutil.copytree(ROOT / "agents", tmp_path / "agents")
+    # Editable shipped settings are not test inputs; keep prompts and contracts from the copies.
+    for name in AGENT_NAMES:
+        path = tmp_path / "agents" / f"{name}.md"
+        _, front, body = path.read_text().split("---", 2)
+        settings = yaml.safe_load(front) | {"harness": "pi", "model": "fixture-model", "thinking": "high"}
+        path.write_text(f"---\n{yaml.safe_dump(settings, sort_keys=False)}---{body}")
     fake = tmp_path / "pi-list"
     fake.write_text("#!/bin/sh\nprintf 'provider model context\\nanthropic claude-x 1M\\n'\n")
     fake.chmod(0o755)
