@@ -106,6 +106,31 @@ def test_reviewer_task_requires_current_documentation_review():
     )
 
 
+def test_implementer_task_requires_evidence_inside_json_summary():
+    from sf.agents import render_task
+
+    text = render_task(ROOT / "agents", "implementer", {
+        "plan": "The full plan",
+        "feedback": "Validation feedback",
+        "documentation": "Target documentation inventory",
+    })
+    assert "The full plan\n\nValidation feedback" in text
+    assert "Target documentation inventory" in text
+    assert text.endswith(
+        "Put the completion-evidence summary required by your role instructions inside the returned "
+        "JSON object's existing `summary` string, not solely in surrounding prose. Include what "
+        "changed and why, every validation check required by this plan and the repository validation "
+        "docs, each marked PASS (with concise actual commands and observed results), FAIL, or BLOCKED "
+        "with its precise blocker, and acceptance-criterion coverage. Finish the summary with the "
+        "outcome of the whole-working-tree `git status` review. Do not add contract fields or repeat "
+        "the same report outside the JSON.\n"
+    )
+    contract = load_agent(ROOT / "agents", "implementer").contract
+    assert contract["required"] == ["summary"]
+    assert set(contract["properties"]) == {"summary"}
+    assert contract["properties"]["summary"]["type"] == "string"
+
+
 def test_missing_task_template_and_context(tmp_path):
     from sf.agents import load_task_template, render_task
 
