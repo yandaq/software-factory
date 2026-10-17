@@ -262,11 +262,12 @@ async function refreshDetail() {
   const d = await getJSON("/api/runs/" + encodeURIComponent(id));
   if (id !== selected) return;  // the user picked another run while this one loaded
   const s = d.state;
-  const stages = STAGES.map(st => {
+  const runStages = s.kind === "improvement" ? ["implement"] : STAGES;
+  const stages = runStages.map(st => {
     const cls = s.completed.includes(st) ? "done" : st === s.stage ? `current ${s.status}` : "";
     return `<span class="stage ${cls}" title="${esc(s.results[st] || "")}">${stageLabel(st)}</span>`;
   }).join("");
-  const results = STAGES.filter(st => s.results[st])
+  const results = runStages.filter(st => s.results[st])
     .map(st => `<tr><td>${stageLabel(st)}</td><td>${esc(s.results[st])}</td></tr>`).join("");
   main.innerHTML = `
     <section>

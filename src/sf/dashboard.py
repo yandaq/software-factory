@@ -1,11 +1,12 @@
 """Local web dashboard over `runs/*/` (stdlib HTTP server, polled JSON API).
 
-Run artifacts are read-only apart from whole-run deletion and the log a retro writes; project Markdown and
-agent configuration are editable, and the improve log can lose a single suggestion on request. A run's retro
-action starts the improve phase again in a child process.
+Run artifacts include retro output and explicit improvement executions. Project Markdown and agent
+configuration are editable; suggestions can be applied by the implementer or deleted. A run's retro
+action starts the read-only improve phase again in a child process.
 """
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -31,6 +32,7 @@ from sf.agents import (
     parse_agent,
     validate_task_template,
 )
+from sf.apply import ApplyRefused, recover_applications, start_application
 from sf.improve import delete_decision, load_decisions
 from sf.models import list_native_models
 from sf.pi import pi_bin
@@ -148,6 +150,12 @@ def delete_run(runs_dir: Path, run_id: str) -> bool:
     run_dir = _run_dir(runs_dir, run_id)
     if run_dir is None:
         return False
+    try:
+        state = json.loads((run_dir / "run-state.json").read_text())
+    except json.JSONDecodeError:
+        state = {}  # unreadable historical runs remain deletable
+    if state.get("kind") == "improvement" and state.get("status") == "running":
+        raise ApplyRefused("Cannot delete an improvement execution while it is running.")
     shutil.rmtree(run_dir)
     return True
 
@@ -314,6 +322,8 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
 
         def do_POST(self) -> None:
             parts = [p for p in self.path.split("?")[0].split("/") if p]
+            if parts == ["api", "improvements", "apply"]:
+                return self._apply_improvement()
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "retro":
                 return self._start_retro(parts[2])
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -324,8 +334,12 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 return self._delete_improvement()
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "document":
                 return self._delete_project_document(parts[2])
-            if len(parts) == 3 and parts[:2] == ["api", "runs"] and delete_run(runs_dir, parts[2]):
-                return self._send(b"{}", "application/json")
+            if len(parts) == 3 and parts[:2] == ["api", "runs"]:
+                try:
+                    if delete_run(runs_dir, parts[2]):
+                        return self._send(b"{}", "application/json")
+                except ApplyRefused as e:
+                    return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.CONFLICT)
             self.send_error(HTTPStatus.NOT_FOUND)
 
         def do_PUT(self) -> None:
@@ -364,6 +378,27 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 return self._json({"error": None})
             self._send(json.dumps({"error": error}).encode(), "application/json", status)
 
+        def _apply_improvement(self) -> None:
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                if not isinstance(body, dict) or any(not isinstance(body.get(k), str)
+                                                     for k in ("ts", "run_id", "title")):
+                    raise ValueError("ts, run_id and title must be strings")
+            except (ValueError, TypeError) as e:
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.BAD_REQUEST)
+            try:
+                run_id = start_application(agents_dir.parent, (body["ts"], body["run_id"], body["title"]))
+            except FileNotFoundError as e:
+                status, error = HTTPStatus.NOT_FOUND, str(e)
+            except ApplyRefused as e:
+                status, error = HTTPStatus.CONFLICT, str(e)
+            except (OSError, ValueError, TypeError, RuntimeError, g.GitError) as e:
+                status, error = HTTPStatus.INTERNAL_SERVER_ERROR, str(e)
+            else:
+                return self._send(json.dumps({"error": None, "run_id": run_id}).encode(),
+                                  "application/json", HTTPStatus.ACCEPTED)
+            self._send(json.dumps({"error": error}).encode(), "application/json", status)
+
         def _delete_improvement(self) -> None:
             status = HTTPStatus.BAD_REQUEST
             try:
@@ -373,6 +408,8 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                     raise ValueError("ts, run_id and title must be strings")
                 status = HTTPStatus.INTERNAL_SERVER_ERROR
                 deleted = delete_decision(agents_dir.parent, body["ts"], body["run_id"], body["title"])
+            except RuntimeError as e:
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.CONFLICT)
             except (OSError, ValueError) as e:  # unreadable log, or a body that is not a JSON object
                 return self._send(json.dumps({"error": str(e)}).encode(), "application/json", status)
             if not deleted:
@@ -471,4 +508,8 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
 
 
 def serve(runs_dir: Path, host: str, port: int, agents_dir: Path | None = None) -> ThreadingHTTPServer:
+    try:
+        recover_applications((agents_dir or runs_dir.parent / "agents").parent)
+    except (OSError, ValueError, KeyError, TypeError):
+        logging.getLogger(__name__).exception("Could not recover interrupted improvement executions")
     return ThreadingHTTPServer((host, port), make_handler(runs_dir, agents_dir or runs_dir.parent / "agents"))

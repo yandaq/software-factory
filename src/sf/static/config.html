@@ -25,9 +25,11 @@ section + section { margin-top: 16px; }
 #improvements h2 { margin-top: 0; font-size: 18px; }
 .improvement { border-top: 1px solid var(--line); padding: 12px 0; overflow-wrap: anywhere; }
 .improvement summary { cursor: pointer; font-weight: 600; }
-.improvement .del { float: right; margin-left: 12px; border: 0; background: none; color: var(--muted);
+.improvement .actions { float: right; display: flex; gap: 8px; margin-left: 12px; }
+.improvement .actions button { border: 0; background: none; color: var(--muted);
   padding: 0 4px; border-radius: 4px; }
 .improvement .del:hover { color: var(--bad); }
+.improvement .play:hover { color: var(--accent); }
 .improvement p { white-space: pre-wrap; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -66,7 +68,7 @@ textarea { width: 100%; height: 60vh; resize: vertical; font: 13px/1.5 var(--mon
   <section><table id="agents"></table></section>
   <section id="improvements" aria-labelledby="improvements-title">
     <h2 id="improvements-title">Improvements log</h2>
-    <p class="muted">Historical improvement decisions, newest first. A decision records what the improve stage proposed; ideas are applied by editing the prompts on this page.</p>
+    <p class="muted">Improvement suggestions, newest first. Play runs the implementation agent in software-factory, preserving existing edits and leaving changes uncommitted. Failed attempts may leave partial changes; inspect them before retrying.</p>
     <div id="improvements-list" role="status">Loading…</div>
     <p id="improvements-status" class="msg" role="status"></p>
   </section>
@@ -83,26 +85,81 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&
 
 let harnesses = {};
 
+let improvementsTimer;
+let improvementBusy = false;
+let improvementsVersion = 0;
+const entryKey = entry => JSON.stringify([entry.ts, entry.run_id, entry.title]);
 async function loadImprovements() {
+  const version = ++improvementsVersion;
+  clearTimeout(improvementsTimer);
+  const expanded = new Set([...document.querySelectorAll(".improvement[open]")].map(el => el.dataset.key));
   const r = await fetch("/api/improvements");
   const entries = await r.json();
+  if (version !== improvementsVersion) return;
   if (!r.ok) throw new Error(entries.error || `HTTP ${r.status}`);
   document.getElementById("improvements-list").innerHTML = entries.length ? entries.map(i =>
-    `<details class="improvement"><summary><button class="del" title="Delete this improvement"
+    `<details class="improvement" data-key="${esc(entryKey(i))}" ${expanded.has(entryKey(i)) ? "open" : ""}>
+      <summary><span class="actions"><button class="play" title="Apply this improvement"
+        aria-label="Apply improvement" data-ts="${esc(i.ts)}" data-run="${esc(i.run_id)}"
+        data-title="${esc(i.title)}" ${["running", "applied"].includes(i.application?.status) ? "disabled" : ""}>▶</button>
+        <button class="del" title="Delete this improvement"
         aria-label="Delete improvement" data-ts="${esc(i.ts)}" data-run="${esc(i.run_id)}"
-        data-title="${esc(i.title)}">🗑</button>${esc(i.title)}</summary>
+        data-title="${esc(i.title)}" ${i.application?.status === "running" ? "disabled" : ""}>🗑</button></span>${esc(i.title)}${i.application ? ` <span class="msg">(${esc(i.application.status)})</span>` : ""}</summary>
       <p class="muted">${esc(i.ts)} · Run ${esc(i.run_id)} · Decision: ${esc(i.decision)}</p>
+      ${i.application ? `<p class="msg ${i.application.status === "failed" ? "err" : ""}">
+        Implementation: ${esc(i.application.status)} · <a href="/#${encodeURIComponent(i.application.run_id)}">Execution details</a>
+        ${i.application.summary ? `<br>${esc(i.application.summary)}` : ""}
+        ${i.application.error ? `<br>${esc(i.application.error)}` : ""}</p>` : ""}
       ${[ ["Rationale", i.rationale], ["Evidence", i.evidence], ["File", i.file],
           ["Proposed change", i.proposed_change],
           ["Note", i.note] ].filter(([, value]) => value).map(([label, value]) =>
         `<p><strong>${label}</strong><br>${esc(value)}</p>`).join("")}</details>`).join("")
     : '<p class="muted">No improvements recorded yet.</p>';
+  if (entries.some(i => i.application?.status === "running"))
+    improvementsTimer = setTimeout(() => loadImprovements().catch(improvementsFailed), 1500);
+}
+
+function improvementsFailed(err) {
+  console.error("improvement log failed", err);
+  const status = document.getElementById("improvements-status");
+  status.className = "msg err"; status.textContent = err.message;
+  improvementsTimer = setTimeout(() => loadImprovements().catch(improvementsFailed), 3000);
+}
+
+async function applyImprovement(button) {
+  if (improvementBusy) return;
+  improvementBusy = true;
+  ++improvementsVersion;
+  clearTimeout(improvementsTimer);
+  button.disabled = true;
+  const status = document.getElementById("improvements-status");
+  status.className = "msg"; status.textContent = "Starting implementation…";
+  try {
+    const r = await fetch("/api/improvements/apply", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ts: button.dataset.ts, run_id: button.dataset.run, title: button.dataset.title}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `apply improvement: HTTP ${r.status}`);
+    status.textContent = "Implementation started. Follow progress in execution details.";
+  } catch (err) {
+    console.error("improvement apply failed", button.dataset.title, err);
+    button.disabled = false;
+    status.className = "msg err"; status.textContent = err.message;
+  } finally {
+    improvementBusy = false;
+    await loadImprovements().catch(improvementsFailed);
+  }
 }
 
 // Deleting a suggestion rewrites improvements.jsonl server-side; the entry is named by ts, run and title.
 async function deleteImprovement(button) {
+  if (improvementBusy) return;
   const entry = {ts: button.dataset.ts, run_id: button.dataset.run, title: button.dataset.title};
   if (!confirm(`Delete "${entry.title}" from the improvements log? This cannot be undone.`)) return;
+  improvementBusy = true;
+  ++improvementsVersion;
+  clearTimeout(improvementsTimer);
   const status = document.getElementById("improvements-status");
   button.disabled = true;
   try {
@@ -120,14 +177,19 @@ async function deleteImprovement(button) {
     console.error("improvement delete failed", entry.title, err);
     button.disabled = false;
     status.className = "msg err"; status.textContent = err.message;
+  } finally {
+    improvementBusy = false;
+    await loadImprovements().catch(improvementsFailed);
   }
 }
 
 document.addEventListener("click", e => {
-  const button = e.target.closest("#improvements .del");
+  const button = e.target.closest("#improvements .del, #improvements .play");
   if (!button) return;
-  e.preventDefault();  // the button sits inside a <summary>: delete must not toggle the entry
-  void deleteImprovement(button);
+  e.preventDefault();  // actions inside a <summary> must not toggle the entry
+  if (button.disabled) return;
+  if (button.matches(".play")) void applyImprovement(button);
+  else void deleteImprovement(button);
 });
 
 function settings(row, harness, model, thinking) {
@@ -278,9 +340,7 @@ saveFile.addEventListener("click", async () => {
 
 load().catch(err => { console.error(err);
   document.getElementById("status").innerHTML = `<span class="err">${esc(err.message)}</span>`; });
-loadImprovements().catch(err => { console.error("improvement log failed", err);
-  const list = document.getElementById("improvements-list");
-  list.className = "err"; list.textContent = err.message; });
+loadImprovements().catch(improvementsFailed);
 </script>
 </body>
 </html>

@@ -64,6 +64,7 @@ class Invocation(BaseModel):
 
 
 class RunState(BaseModel):
+    kind: Literal["workflow", "improvement"] = "workflow"
     run_id: str
     target: str
     trunk: str

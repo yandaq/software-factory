@@ -1,6 +1,8 @@
 """Improve phase: record evidence-backed suggestions; a human applies them from the dashboard."""
 
+import fcntl
 import json
+from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +14,48 @@ if TYPE_CHECKING:
 IMPROVEMENTS = "improvements.jsonl"
 
 
+def _serialized(fn):
+    @wraps(fn)
+    def locked(factory, *args, **kwargs):
+        # A separate lock file survives atomic replacement of the log and covers CLI writers too.
+        runs = factory / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        with (runs / ".improvements.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return fn(factory, *args, **kwargs)
+    return locked
+
+
+def decision_identity(record: dict[str, Any]) -> tuple[str, str, str]:
+    return record.get("ts"), record.get("run_id"), record.get("title")
+
+
+def _replace_log(path: Path, lines: list[str]) -> None:
+    temporary = path.with_suffix(".jsonl.tmp")
+    try:
+        temporary.write_text("".join(f"{line}\n" for line in lines))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@_serialized
+def update_application(factory: Path, identity: tuple[str, str, str], application: dict[str, Any]) -> None:
+    path = factory / IMPROVEMENTS
+    lines = path.read_text().splitlines()
+    for n, line in enumerate(lines):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if decision_identity(record) == identity:
+            record["application"] = application
+            lines[n] = json.dumps(record, ensure_ascii=False)
+            _replace_log(path, lines)
+            return
+    raise FileNotFoundError("That improvement is no longer in the log.")
+
+
+@_serialized
 def load_decisions(factory: Path) -> list[dict[str, Any]]:
     path = factory / IMPROVEMENTS
     if not path.exists():
@@ -19,11 +63,13 @@ def load_decisions(factory: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+@_serialized
 def record_decision(factory: Path, decision: dict[str, Any]) -> None:
     with (factory / IMPROVEMENTS).open("a") as f:
         f.write(json.dumps(decision, ensure_ascii=False) + "\n")
 
 
+@_serialized
 def delete_decision(factory: Path, ts: str, run_id: str, title: str) -> bool:
     """Drop the first recorded suggestion matching ts, run_id and title, rewriting the log without it.
 
@@ -41,11 +87,13 @@ def delete_decision(factory: Path, ts: str, run_id: str, title: str) -> bool:
         record = json.loads(line)  # a log the factory cannot parse must fail visibly, not be rewritten
         fields = (record.get("ts"), record.get("run_id"), record.get("title")) if isinstance(record, dict) else None
         if not deleted and fields == (ts, run_id, title):
+            if (record.get("application") or {}).get("status") == "running":
+                raise RuntimeError("Cannot delete an improvement while it is running.")
             deleted = True
             continue
         keep.append(line)
     if deleted:
-        path.write_text("".join(f"{line}\n" for line in keep))
+        _replace_log(path, keep)
     return deleted
 
 

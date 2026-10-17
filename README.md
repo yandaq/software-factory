@@ -34,8 +34,8 @@ current directory is the factory repo and that the target is a git repository wi
 unusable target exits 1, a `FOLDER` argument that is an existing file is a usage error, and neither
 creates the queue folders.
 
-The dashboard is read-only apart from its editors and run retros, and it refreshes every 2 s: every run's
-status, the stage pipeline, review/validation results per loop, token usage, artefacts (plan, reviews,
+The dashboard provides editors, run retros and explicit improvement application. It refreshes every 2 s:
+every run's status, the stage pipeline, review/validation results per loop, token usage, artefacts (plan, reviews,
 validation logs, stderr), orchestrator events and tool calls.
 Each run in the sidebar has a **retro** button. It re-enters the improve phase for that run, exactly as
 `sf improve <run-id>` does, so the improvement agent can be pointed at a historical run again: it studies
@@ -91,7 +91,7 @@ Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, 
 | `agents/<name>.md` | Agent definitions: YAML frontmatter (harness, model, thinking, tools, JSON Schema contract) + role prompt |
 | `templates/` | Starter `docs/coding-standards.md`, `docs/architecture.md` and `.gitignore` for targets that lack them (`AGENTS.md` and `docs/VALIDATION.md` are downloaded from [agents-default](https://github.com/yandaq/agents-default)) |
 | `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `<harness>-<stage>-<n>.stderr` / `.jsonl`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`, `retro.log` |
-| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes, and delete any one entry from that list. A decision records what was proposed; applying it is a manual edit in the dashboard. |
+| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes, and delete any one entry from that list. Play invokes the configured implementer against software-factory, leaving changes uncommitted. Suggestions retain applied/failed status and execution diagnostics; failures can be retried. |
 | `src/sf/` | Orchestrator (see [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ## Target configuration
@@ -116,9 +116,13 @@ uv run ruff check src tests
 
 Agent tuning covers both persistent role instructions and task wording. The dashboard
 provides separate Markdown links for each. The improver proposes evidence-backed changes to either layer
-and records them in `improvements.jsonl`; applying a suggestion means editing the file it names in the
-dashboard. Missing or invalid task templates fail visibly, and the dashboard rejects an edit that breaks
-rendering or the JSON contract.
+and records them in `improvements.jsonl`. On config, play beside delete runs the configured implementer
+against software-factory. Existing edits are allowed and must be preserved; related factory files may be
+changed and changes remain uncommitted. The named Markdown file must exist in software-factory.
+The row shows progress, a result and execution diagnostics; applied suggestions cannot be replayed, while
+failures can be retried after inspecting partial changes. Only one factory run or application executes
+at a time. Config edits can also still be made manually. Missing or invalid task templates fail visibly,
+and the dashboard rejects an edit that breaks rendering or the JSON contract.
 
 Every workflow agent receives an automatically discovered target-documentation inventory,
 including files such as DESIGN.md and component-local AGENTS.md. Discovery includes existing

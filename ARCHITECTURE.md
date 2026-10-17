@@ -5,14 +5,15 @@
 | `cli.py` | Typer commands; lockfile; watch wiring (per-run `RunLock`, `mailbox_*` events, up-front target check); maps outcomes to exit codes |
 | `mailbox.py` | Watch-folder queue only: `todo/`/`doing/`/`done/` layout, oldest-first candidates, settle guard, collision-safe claim/complete and the monitor loop; the caller supplies the per-file executor and the busy reason, poll and settle intervals default to module constants |
 | `workflow.py` | Stage driver, run-id allocation (`YYYYMMDD-HHMMSS`, `-N` suffixed when `runs/<id>` exists), per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge |
-| `improve.py` | Improve phase: read-only improver suggestions, decision history in `improvements.jsonl`; suggestions are never applied, applying one is a human edit in the dashboard |
+| `improve.py` | Improve phase: read-only improver suggestions, decision history and application metadata in `improvements.jsonl`; serialized access and atomic rewrites |
+| `apply.py` | Explicit background implementation of a selected suggestion in the factory working tree; factory run lock, durable result and interruption recovery |
 | `runner.py` | Shared invocation lifecycle, streamed subprocess boundary, JSON contract validation + re-prompts |
 | `pi.py`, `claude.py`, `codex.py` | Native CLI invocation, session handling, success detection and event/usage normalization; `pi.py` retains original runner imports for compatibility |
 | `run.py` | `RunState` (Pydantic), `events.jsonl` emitter, token aggregation, `RunLock` |
 | `agents.py` | Agent definitions plus fixed-vocabulary task-template validation and literal rendering |
 | `target.py` | `.sf.toml`, starter standards and starter `.gitignore`, generated-file environment, Git-based Markdown discovery, validation commands |
 | `git.py` | git wrapper |
-| `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/`; settings controls edit frontmatter; Markdown editor edits role definitions and task templates; a run's retro starts the improve phase again in a child process |
+| `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/`; settings controls edit frontmatter; Markdown editor edits role definitions and task templates; a run's retro starts the improve phase again in a child process; config play starts an improvement execution |
 | `console.py` | Rich live display and terminal prompts (`TerminalHuman`) |
 
 `Workflow` depends on a `Human` and a display protocol, so tests substitute scripted fakes.
@@ -66,9 +67,10 @@ requests and logs remain literal. Harness adapters and contract corrections reta
 their existing interfaces. Templates are loaded for each new invocation.
 
 The improver is read-only: it proposes evidence-backed changes and the improve stage records every
-suggestion that survives historical rejection filtering. No agent edits prompt files; a human applies a
-suggestion with the dashboard Markdown editor, which validates the file it saves. Whether a shared-prompt
-idea stays portable across unrelated targets is the judgement of the person applying it.
+suggestion that survives historical rejection filtering. A human can edit a suggestion manually or click
+play in config to invoke the configured implementer against software-factory. The implementer may change
+related factory files and follows repository validation guidance. Shared-prompt portability remains the
+judgement of the person choosing to apply the suggestion.
 
 ## Documenter responsibility
 
@@ -94,29 +96,31 @@ An inventory provides visibility, not proof that an agent read or understood eve
 old plans and descriptive docs are not automatically governing requirements.
 
 The improve stage supplies the inventory to the improver, so suggestions can name existing target docs;
-applying them is a human edit. Contract-correction retries reuse the current invocation context. Starter
-standards and validation-command sources do not change; discovery never executes doc content.
+application is an explicit human action through the editor or the config play button. Contract-correction
+retries reuse the current invocation context. Starter standards and validation-command sources do not change; discovery never executes doc content.
 
 ## Improvement recording
 
 The improve stage checks the target back out to the trunk, runs the read-only improver over the merged
 code and the run logs, drops ideas whose title was previously rejected (`idea_filtered`) and appends the
 rest to `improvements.jsonl` with `decision: automatic` and an empty note, then commits only that file.
-Nothing is applied: applying a suggestion means editing the prompt or document it names in the dashboard,
-so the history records what was proposed, not what was done.
+The improve stage itself applies nothing. Explicit config applications add separate `application`
+metadata without changing the historical decision fields.
 
 A recorded suggestion can be dropped from that history. The `/config` list carries a delete action per
 entry, and `DELETE /api/improvements` identifies the record by its own `ts`, `run_id` and `title` rather
 than by position, so a page that is out of date cannot delete somebody else's entry: an identity that is
 no longer in the log is a 404 and nothing is rewritten. The surviving lines are rewritten verbatim and no
-commit is created, matching project-document deletion. The improve stage remains the log's only other
-writer and appends one line per suggestion at the end of a run, so a delete races that append only while a
-retro is recording its ideas.
+commit is created, matching project-document deletion. All log operations use a separate advisory file
+lock in `runs/.improvements.lock`; rewrites replace the log atomically. This coordinates dashboard threads
+and CLI improve writers without locking a log inode that replacement would invalidate. Running suggestions
+and their execution runs cannot be deleted.
 
 Each recorded idea carries `file`, the one Markdown file it changes. The improver's contract requires a
 repository-relative `.md` path with no absolute or `..` segment, which is the guarantee the dashboard's
-apply action relies on; resolving that path to a real file and writing it stays the dashboard's
-responsibility, so the stage itself still touches neither repository.
+apply action relies on. The apply service checks that this is an existing file in the factory Markdown
+inventory, rejecting paths outside software-factory. The improve stage still touches neither repository
+except for recording the suggestions log.
 
 Improvement selection never calls the Human protocol. That protocol now covers only optional plan
 approval and loop-cap choices. Historical human decisions remain readable and no decision history is
@@ -130,6 +134,34 @@ the dashboard server, using the interpreter that serves it, in the factory direc
 writes into the run's own state file and event stream, which is how the polled page shows a retro in
 progress and its result afterwards. The server only guards the door: an unknown run is a 404 and a run that
 has not merged, or one whose factory run lock is held by a live process, is a 409 with the reason.
+
+## Explicit improvement application
+
+`POST /api/improvements/apply` identifies a stored suggestion by `ts`, `run_id` and `title`,
+loads its contents server-side, and returns HTTP 202 with an execution run ID. Bad identity bodies
+return 400, missing records return 404, and busy/already-running/already-applied requests return 409.
+The service takes `RunLock` before accepting work and transfers responsibility for releasing it to a
+background worker. The worker invokes only the configured implementer through the existing runner and
+task template, with the factory as both working directory and documentation source. It then runs any
+configured factory validation commands. It neither branches, commits, reviews, merges nor generates new
+suggestions. Existing edits are allowed and the prompt requires their preservation.
+
+Each attempt has a `kind: improvement` run containing prompt/plan artifacts, harness output, events,
+usage, validation logs and state. The run dashboard shows only the implement stage for these runs.
+`sf resume` refuses them; retrying from config creates a new attempt with current agent settings.
+Application metadata retains run ID, status (`running`, `applied`, `failed`), owner PID, timestamps and
+summary/error alongside the original suggestion. Config polls active attempts and keeps expanded rows.
+Mutation requests invalidate older polls so stale responses cannot restore a deleted entry or old status.
+Successful play buttons stay disabled; failed attempts allow retry. Startup marks attempts owned by a
+dead server process failed and updates their run state. History retains successful status even if a
+finished execution's diagnostics are subsequently deleted.
+
+The worker is intentionally hosted in the dashboard process, avoiding another execution command and
+queue. Failures preserve partial working-tree changes rather than reverting edits that may belong to
+the user. An abrupt server termination can also interrupt execution; inspect partial changes and any
+remaining harness process before retrying. File-scope and preservation instructions are agent obligations,
+not a filesystem sandbox. Contract-valid completion plus successful configured validation determines an
+applied result; when no commands are configured the agent's validation evidence remains in its output.
 
 ## Dashboard project documents
 

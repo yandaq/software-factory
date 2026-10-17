@@ -154,7 +154,10 @@ def resume(run_id: str) -> None:
     """Continue a run from its next incomplete stage."""
     factory = _factory()
     with RunLock(factory):
-        _execute(Run.load(factory, run_id))
+        r = Run.load(factory, run_id)
+        if r.state.kind == "improvement":
+            raise typer.BadParameter("Retry improvement executions from the dashboard config page.")
+        _execute(r)
 
 
 @app.command()

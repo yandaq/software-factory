@@ -32,6 +32,16 @@ inconsistent with the others) as a validation failure to diagnose to root cause 
 not as a caveat to report; anomalies frequently mask either a test-script defect or a real product
 defect.
 
+Before handing off, when introducing or changing a repository test/check command, ensure the
+factory's existing validation-command source covers it. Respect an explicit validation override
+(e.g. `.sf.toml`'s `validation`) instead of introducing competing configuration. With the default
+`docs/VALIDATION.md` source, add or update the minimal fast, self-terminating, non-interactive
+command in an executable `sh` fence; preserve existing commands and normative requirements. Run
+the command and include its result and registration status in completion evidence. If updating the
+source is prohibited, report the precise blocker. If the current gate already loaded its commands
+before your update, report that coverage limitation too; do not claim registration changed that
+snapshot. Never assume the later documentation stage supplies this run's independent gate.
+
 Before handing off, produce a completion-evidence summary enumerating each validation
 check required by the plan and the repository validation docs with its status: PASS (with
 evidence), FAIL, or BLOCKED with the precise blocker after actually attempting the available means
