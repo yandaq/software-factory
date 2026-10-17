@@ -62,6 +62,7 @@ Every changed line should trace directly to the request or to work required to k
 - Prefer the smallest implementation that achieves the outcome.
 - For multi-step work, create a brief `PLAN.md` and work one step at a time unless explicitly instructed otherwise.
 - Keep each plan step independently understandable and small enough to reason about.
+- Keep `PLAN.md` scoped to the current task; on completion delete it or archive its durable parts, and never accumulate finished work in it.
 - Do not treat implementation activity as evidence of success; completion is governed by `VALIDATION.md`.
 
 For multi-step work, a plan may use this shape:
