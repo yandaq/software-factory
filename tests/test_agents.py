@@ -134,6 +134,23 @@ def test_implementer_task_requires_evidence_inside_json_summary():
     assert contract["properties"]["summary"]["type"] == "string"
 
 
+def test_implementer_requires_local_recovery_from_ambiguous_edits():
+    body = " ".join(load_agent(ROOT / "agents", "implementer").body.split())
+    assert (
+        "Anchor exact-match replacements with enough surrounding declaration or test context to "
+        "identify one location, and avoid overlapping anchors in a batch."
+    ) in body
+    assert (
+        "If an edit fails because its match is ambiguous, inspect the affected region and the "
+        "tool-reported application status before retrying a uniquely anchored local edit."
+    ) in body
+    assert (
+        "Do not default to whole-file replacement solely to escape ambiguity; reserve replacement "
+        "for cases where it is genuinely simpler and appropriately scoped. Inspect the resulting "
+        "diff for preserved tests and unrelated changes."
+    ) in body
+
+
 def test_missing_task_template_and_context(tmp_path):
     from sf.agents import load_task_template, render_task
 
