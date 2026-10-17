@@ -34,8 +34,18 @@ current directory is the factory repo and that the target is a git repository wi
 unusable target exits 1, a `FOLDER` argument that is an existing file is a usage error, and neither
 creates the queue folders.
 
-The dashboard is read-only and refreshes every 2 s: every run's status, the stage pipeline, review/validation
-results per loop, token usage, artefacts (plan, reviews, validation logs, stderr), orchestrator events and tool calls.
+The dashboard is read-only apart from its editors and run retros, and it refreshes every 2 s: every run's
+status, the stage pipeline, review/validation results per loop, token usage, artefacts (plan, reviews,
+validation logs, stderr), orchestrator events and tool calls.
+Each run in the sidebar has a **retro** button. It re-enters the improve phase for that run, exactly as
+`sf improve <run-id>` does, so the improvement agent can be pointed at a historical run again: it studies
+that run's logs and its merged code and records suggestions in `improvements.jsonl`, and it applies
+nothing. The retro runs as a child process of the dashboard, so the run's own page shows the improve stage
+live and the child's console output is downloadable as `retro.log`. A run that has not merged has the
+button disabled, and a retro that cannot start (another `sf` run holds the run lock) is reported in the
+browser and in `retro.log`. A retro analyses the evidence from scratch, so it can record an idea that run
+already produced.
+
 The **config** page (`/config`) sets each agent's harness, model and thinking level by updating only those
 frontmatter fields in `agents/<name>.md`. Changes apply to the next invocation; contract-correction retries
 keep the original settings. Pi remains the default when `harness` is absent, including for existing definitions.
@@ -57,9 +67,9 @@ chosen level. Unsupported models/settings fail the stage with native stderr avai
 The adapters have been smoke-tested with Claude Code 2.1.296 and Codex CLI 0.162.1.
 
 All harnesses use the same workflow, JSON contracts and two same-session correction retries. Claude Code
-maps the existing agent tool lists to native tools. Codex uses a read-only sandbox for planner/reviewer/improver/improvement-reviewer
-and workspace-write for editing roles; its shell is broader than Pi's exact tool list, including for the
-improvement-implementer. Existing file-scope checks remain in place. Permission prompts are disabled for
+maps the existing agent tool lists to native tools. Codex uses a read-only sandbox for planner/reviewer/improver
+and workspace-write for editing roles; its shell is broader than Pi's exact tool list. Existing file-scope checks
+remain in place. Permission prompts are disabled for
 new harnesses, and no sandbox/permission bypass is enabled. Operations blocked by native permissions
 fail visibly rather than waiting for an unattended prompt.
 
@@ -80,8 +90,8 @@ Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, 
 | `agents/<name>.user.md` | Editable task templates with fixed context placeholders; see [agents/README.md](agents/README.md) |
 | `agents/<name>.md` | Agent definitions: YAML frontmatter (harness, model, thinking, tools, JSON Schema contract) + role prompt |
 | `templates/` | Starter `docs/coding-standards.md` and `docs/architecture.md` for targets that lack them (`AGENTS.md` and `docs/VALIDATION.md` are downloaded from [agents-default](https://github.com/yandaq/agents-default)) |
-| `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `<harness>-<stage>-<n>.stderr` / `.jsonl`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log` |
-| `improvements.jsonl` | Automatic improvement selections and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes. Decisions record intent, not confirmed application. |
+| `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `<harness>-<stage>-<n>.stderr` / `.jsonl`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`, `retro.log` |
+| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes. A decision records what was proposed; applying it is a manual edit in the dashboard. |
 | `src/sf/` | Orchestrator (see [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ## Target configuration
@@ -105,29 +115,24 @@ uv run ruff check src tests
 `SF_PI`, `SF_CLAUDE`, and `SF_CODEX` override the corresponding CLI binary paths.
 
 Agent tuning covers both persistent role instructions and task wording. The dashboard
-provides separate Markdown links for each. The improver can propose evidence-backed
-changes to either layer; suggestions are applied automatically and validated before committing. Missing or
-invalid task templates fail visibly. Structural validation checks rendering, while
-the improver selects evidence-backed changes and the portability reviewer checks shared edits.
+provides separate Markdown links for each. The improver proposes evidence-backed changes to either layer
+and records them in `improvements.jsonl`; applying a suggestion means editing the file it names in the
+dashboard. Missing or invalid task templates fail visibly, and the dashboard rejects an edit that breaks
+rendering or the JSON contract.
 
 Every workflow agent receives an automatically discovered target-documentation inventory,
 including files such as DESIGN.md and component-local AGENTS.md. Discovery includes existing
 tracked and non-ignored untracked Markdown anywhere in the repository, with case-insensitive
 extensions; deleted files and symlinks are excluded. Agents read the applicable documents,
-while rendered task artifacts preserve the supplied paths. Automatically selected improvements may update
-any existing discovered document, using an allowlist frozen before that invocation. New target
-docs remain the documenter's responsibility under docs/. Validation commands still come from
+while rendered task artifacts preserve the supplied paths. Improvement suggestions may name any existing
+discovered document. Validation commands still come from
 .sf.toml overrides or docs/VALIDATION.md.
 
-Shared prompt improvements must generalise beyond the current target. After structural validation,
-a read-only `improvement-reviewer` checks actual shared edits for assumptions about target-only
-components, paths, architecture or environments. Only explicit approval with no findings permits
-commits. Its pre-improvement instructions are pinned so edits to the gate cannot weaken their own
-review. Rejection or review failure restores prompts and stops the improve stage; target docs remain
-uncommitted. Target-only improvements skip the gate. Review inputs/results and failure diagnostics
-are recorded in run artifacts and events. Improvement selection requires no human input; new
-selections are recorded as `decision: automatic`, and historical decisions remain readable. This is an
-agent judgement enforced by the commit gate, not a deterministic guarantee of semantic portability.
+Ideas about shared factory prompts must generalise beyond the current target, because they are applied
+to `agents/*.md` for every future target; project-specific guidance belongs in the target's own
+documentation. Portability is judged by the person applying the suggestion in the dashboard. Improvement
+selection requires no human input; new suggestions are recorded as `decision: automatic`, and historical
+decisions remain readable.
 
 The run dashboard's **Project documents** panel lists current Markdown files from the selected
 run's target, below the activity chart. Click a document button to review and edit it in the popup

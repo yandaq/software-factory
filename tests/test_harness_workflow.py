@@ -15,8 +15,7 @@ def configure(factory, fake_pi, fake_harness, steps):
     fake_pi(steps)
     native = fake_harness(steps)
     for name, harness in (("implementer", "claude-code"), ("reviewer", "codex"),
-                          ("documenter", "claude-code"), ("improver", "codex"),
-                          ("improvement-implementer", "codex"), ("improvement-reviewer", "codex")):
+                          ("documenter", "claude-code"), ("improver", "codex")):
         assert set_agent_config(factory / "agents", name, "native-model", "medium", harness) is None
     sh(factory, "git", "add", "agents")
     sh(factory, "git", "commit", "-qm", "harness config")
@@ -72,23 +71,13 @@ def test_native_documenter_scope_enforced(factory, target, fake_pi, fake_harness
     assert run.state.status == "failed"
 
 
-def test_native_improvement_decisions_and_scope(factory, target, fake_pi, fake_harness):
-    steps = script(improver=[{"text": json.dumps({"ideas": [IDEA]})}],
-                   **{"improvement-implementer": [{"text": '{"summary":"improved"}', "write": {
-                       "agents/implementer.md": (factory / "agents/implementer.md").read_text() + "\nExtra rule\n",
-                       "unrelated.py": "violation",
-                       str(target / "docs/coding-standards.md"): "# Improved standards\n",
-                   }}]})
-    native = configure(factory, fake_pi, fake_harness, steps)
+def test_native_improver_records_decisions(factory, target, fake_pi, fake_harness):
+    native = configure(factory, fake_pi, fake_harness, script(improver=[{"text": json.dumps({"ideas": [IDEA]})}]))
     run, wf = start(factory, target, Human())
     wf.execute()
     assert run.state.status == "done" and load_decisions(factory)[0]["decision"] == "automatic"
-    assert not (factory / "unrelated.py").exists()
-    assert (target / "docs/coding-standards.md").read_text() == "# Improved standards\n"
-    implementer = next(c for c in calls(native) if c["agent"] == "improvement-implementer")
-    assert "Apply this automatically selected improvement." in implementer["message"]
-    assert 'sandbox_workspace_write.writable_roots=' in " ".join(implementer["argv"])
-    review = calls(native)[-1]
-    assert review["agent"] == "improvement-reviewer"
-    assert 'sandbox_mode="read-only"' in review["argv"]
-    assert 'agents/implementer.md' in review["message"]
+    assert run.state.results["improve"] == "1 improvements recorded"
+    assert sh(target, "git", "log", "-1", "--format=%s").strip() == f"sf {run.state.run_id}: merge sf/{run.state.run_id}"
+    improver = next(c for c in calls(native) if c["agent"] == "improver")
+    assert "Analyse run" in improver["message"]
+    assert 'sandbox_mode="read-only"' in improver["argv"]

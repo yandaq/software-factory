@@ -108,7 +108,7 @@ def test_missing_binary_is_observable(run, tmp_path, monkeypatch, harness):
 
 
 @pytest.mark.parametrize("harness", ["claude-code", "codex"])
-@pytest.mark.parametrize("name", ["planner", "implementer", "improvement-implementer"])
+@pytest.mark.parametrize("name", ["planner", "implementer"])
 def test_native_permission_and_resume_commands(run, fake_harness, tmp_path, harness, name):
     script = fake_harness({name: [{"text": "no json"}, {"text": '{"plan":"ok","summary":"ok"}'}]})
     run_agent(run, agent(harness, name), "task", tmp_path)
@@ -118,15 +118,11 @@ def test_native_permission_and_resume_commands(run, fake_harness, tmp_path, harn
         if harness == "codex":
             sandbox = "read-only" if name == "planner" else "workspace-write"
             assert f'sandbox_mode="{sandbox}"' in argv and 'approval_policy="never"' in argv
-            if name == "improvement-implementer":
-                assert f'sandbox_workspace_write.writable_roots={json.dumps([str(run.target)])}' in argv
         else:
             tools = argv[argv.index("--tools") + 1].split(",")
             assert ("Bash" in tools) == (name == "implementer")
             assert ("Write" in tools) == (name != "planner")
             assert argv[argv.index("--permission-prompts") + 1] == "none"
-            if name == "improvement-implementer":
-                assert argv[argv.index("--add-dir") + 1] == str(run.target)
 
 
 def test_mixed_totals_distinguish_unknown_from_zero(run):

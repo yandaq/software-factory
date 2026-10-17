@@ -33,6 +33,11 @@ sf resume <run-id>
 sf improve <run-id>        # re-enter the improve phase
 ```
 
+- **Retro.** The same phase can be re-entered from the dashboard: each merged run has a **retro** button
+  that starts `sf improve <run-id>` as a child process of the dashboard server, so the improvement agent
+  can be pointed at a historical run again. The CLI rule applies unchanged (an unmerged run is refused)
+  and a retro that cannot start because another run holds the lockfile is reported in the browser.
+
 - Runs are serial and guarded by a lockfile.
 - **Watch folder.** `<folder>` replaces the prompt argument: the command creates `todo/`, `doing/` and
   `done/` inside it and monitors `todo/` until Ctrl+C, which exits cleanly. Each regular Markdown file
@@ -66,7 +71,7 @@ contract:                 # JSON Schema for the final response
 <system prompt>
 ```
 
-Agents: `planner`, `implementer`, `reviewer`, `documenter`, `improver`, `improvement-implementer`, `improvement-reviewer`.
+Agents: `planner`, `implementer`, `reviewer`, `documenter`, `improver`.
 
 Each agent also has a required `agents/<name>.user.md` task template. All task templates include
 `{{documentation}}`: the target repository path and a JSON inventory of repository-relative
@@ -92,23 +97,20 @@ pi --mode json --model <model> --thinking <thinking> --tools <tools> \
 
 1. **Branch.** Create a new branch `sf/<run-id>` in the target, off the trunk.
 2. **Prompt.** Save the prompt to `runs/<id>/prompt.md`.
-3. **Plan.** The planner produces `plan.md`. With `--approve-plan`, a human approves the plan before the run continues. The approved plan is then committed to the target branch as `docs/plans/<run-id>.md` before implementation starts.
+3. **Plan.** The planner produces `plan.md`. Acceptance criteria and out-of-scope lists scope the implementation; documentation left for the document stage is recorded as guidance, not excluded by the plan, unless the request itself forbids touching documentation. With `--approve-plan`, a human approves the plan before the run continues. The approved plan is then committed to the target branch as `docs/plans/<run-id>.md` before implementation starts.
 4. **Implement ⇄ Review**, for up to **5 loops**:
    - **Implementer.** Starts a fresh session each loop, with the plan, the latest review findings and the latest validation output. It follows **no** coding standards and simply delivers the planned work. Commit.
    - **Validation.** The orchestrator runs the commands listed in `docs/VALIDATION.md`. If there are none, validation is skipped and the skip is logged. On failure, control returns to the implementer without running the reviewer, and this counts as a loop.
    - **Reviewer.** Reviews the work against `docs/coding-standards.md`. It returns `{verdict: approve|changes_requested, findings[]}`, which is written to `review-<n>.md`.
    - **Cap reached.** If the reviewer has not approved after 5 loops, a human chooses: merge anyway, abort, or allow N more loops. This outcome is flagged to the improve phase.
-5. **Document.** The documenter diffs `trunk...branch`. It reduces drift between implemented code and docs, updating existing documentation including `AGENTS.md`, `docs/VALIDATION.md`, `docs/coding-standards.md` and `docs/architecture.md` when factual guidance changes. It preserves normative requirements and reports conflicts rather than weakening standards. New docs are restricted to `docs/`; code and runtime configuration are outside its scope. The orchestrator commits the documentation changes.
+5. **Document.** The documenter diffs `trunk...branch`. It reduces drift between implemented code and docs, updating existing documentation including `README.md`, `AGENTS.md`, `docs/VALIDATION.md`, `docs/coding-standards.md` and `docs/architecture.md` when factual guidance changes. Silence counts as drift: where the diff makes information necessary and the document that naturally holds it — usually `README.md` — omits it, the documenter adds it. It preserves normative requirements and reports conflicts rather than weakening standards. New docs are restricted to `docs/`; code and runtime configuration are outside its scope. The orchestrator commits the documentation changes.
 6. **Merge.** Local `git merge --no-ff` into the trunk. If there is a conflict, the run aborts.
-7. **Improve** (automatic):
+7. **Improve** (suggestions only):
    - The improver analyses the generated code, all run logs, and the past decisions recorded in `improvements.jsonl`. Ideas that were previously rejected must not be proposed again.
-   - Every suggestion that survives historical rejection filtering is selected automatically and recorded in `improvements.jsonl` with `decision: automatic` before application. Selection does not imply successful application; commit events and stage results record success. Historical decisions remain readable. There is no terminal approve/skip/reject prompt or human note.
-   - Each selected idea is implemented by a new `improvement-implementer` agent run.
-   - Shared factory instructions must work on unrelated targets; project-specific rules belong in target documentation.
-   - After structural validation, actual shared `agents/*.md` edits are reviewed by a read-only `improvement-reviewer` (default Codex, gpt-6.1-sol, medium). Its definition and task template are pinned before implementation. Target-only improvements skip review.
-   - Only explicit portability-reviewer approval with no findings permits shared-prompt improvement commits. Rejection, invalid output or invocation failure restores shared prompts to the pre-improvement snapshot and fails the improve stage; target docs stay uncommitted. Review inputs/results and failures are observable in run artifacts/events. No automatic implementation repair is attempted.
-     - **Allowed to change:** `agents/*.md` (committed in the factory repo, with the run-id in the commit message) and any existing Markdown document in the discovered target inventory (a follow-up commit on the target trunk). The inventory is frozen before each selected improvement and supplies its context, enforced target allowlist and commit paths. New target documents remain the documenter's responsibility under `docs/`.
-     - **Not allowed to change:** the orchestrator code, target code, or newly created target files.
+   - Every suggestion that survives historical rejection filtering is recorded in `improvements.jsonl` with `decision: automatic` and an empty note, and only that file is committed. Selection records what was proposed, not what was applied. Historical decisions remain readable. There is no terminal approve/skip/reject prompt or human note.
+   - Each idea names exactly one existing Markdown file in its required `file` field: `agents/<name>.md` or `agents/<name>.user.md` relative to the factory, or a path copied from the target-documentation inventory. The JSON contract rejects a missing path, an absolute path, a `..` segment and a non-Markdown path, so the dashboard can offer the idea as one edit to one file.
+   - No agent applies a suggestion. Shared factory instructions must work on unrelated targets, so project-specific rules belong in target documentation; applying an idea means editing the prompt, template or target document it names in the dashboard.
+   - A re-run (the CLI or a dashboard retro) analyses the same evidence again and only previously **rejected** titles are filtered out, so it can record an idea that was already recorded. Recording what was proposed stays the improver's judgement; nothing is applied either way.
 
 Run state is saved to `runs/<id>/run-state.json` as each stage completes. Run ids are
 `YYYYMMDD-HHMMSS`, suffixed `-N` when `runs/<id>` already exists: two runs started inside one second —
@@ -122,6 +124,7 @@ which the watch monitor makes easy — must not share a run directory, state fil
 - `sessions/`: Pi session transcripts.
 - `pi-<stage>-<n>.stderr`
 - `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`
+- `retro.log`: the console output of the latest dashboard retro of this run, downloadable as an artefact.
 - `run-state.json`: the current stage, the loop number, the result of each stage, and token totals.
 
 Watched prompts also leave `sf`-source events in the run they produced: `mailbox_claimed` (file name,

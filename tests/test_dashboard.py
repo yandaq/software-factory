@@ -1,5 +1,7 @@
 import json
+import os
 import shutil
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -89,6 +91,66 @@ def test_delete_run(server, tmp_path):
     urllib.request.urlopen(urllib.request.Request(server + "/api/runs/r1", method="DELETE")).close()
     assert not (tmp_path / "runs" / "r1").exists()
     assert [r["run_id"] for r in json.loads(get(server + "/api/runs"))] == ["broken"]
+
+
+@pytest.fixture
+def retro_started(monkeypatch):
+    """Record the child process a retro would start, instead of running the improvement agent."""
+    started = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            started.append({"cmd": cmd, **kwargs})
+
+    monkeypatch.setattr("sf.dashboard.subprocess.Popen", FakePopen)
+    return started
+
+
+def post(url):
+    req = urllib.request.Request(url, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}")
+
+
+def mark_merged(tmp_path):
+    path = tmp_path / "runs" / "r1" / "run-state.json"
+    data = json.loads(path.read_text())
+    data["completed"] = ["branch", "prompt", "plan", "implement", "document", "merge", "improve"]
+    path.write_text(json.dumps(data))
+
+
+def test_retro_starts_the_improvement_agent_again(server, tmp_path, retro_started):
+    assert 'class="retro"' in get(server + "/")
+    mark_merged(tmp_path)
+    assert post(server + "/api/runs/r1/retro") == (200, {"error": None})
+    assert retro_started[0]["cmd"] == [sys.executable, "-m", "sf.cli", "improve", "r1"]
+    assert retro_started[0]["cwd"] == tmp_path
+    log = tmp_path / "runs" / "r1" / "retro.log"
+    assert log.is_file()
+    log.write_text("stage improve\n")
+    assert "retro.log" in json.loads(get(server + "/api/runs/r1"))["artefacts"]
+    assert get(server + "/api/runs/r1/retro.log") == "stage improve\n"
+
+
+def test_retro_refused_before_merge_or_while_busy(server, tmp_path, retro_started):
+    assert post(server + "/api/runs/r1/retro")[0] == 409  # r1 has not merged
+    assert "not merged" in post(server + "/api/runs/r1/retro")[1]["error"]
+    mark_merged(tmp_path)
+    (tmp_path / "runs" / ".lock").write_text(str(os.getpid()))
+    assert post(server + "/api/runs/r1/retro")[0] == 409  # another sf run holds the run lock
+    assert post(server + "/api/runs/nope/retro")[0] == 404
+    assert post(server + "/api/runs/../retro")[0] == 404
+    assert retro_started == []
+
+
+def test_run_list_marks_retro_eligibility(server, tmp_path):
+    assert {r["run_id"]: r["can_retro"] for r in json.loads(get(server + "/api/runs"))} == {
+        "r1": False, "broken": False}
+    mark_merged(tmp_path)
+    assert [r["can_retro"] for r in json.loads(get(server + "/api/runs")) if r["run_id"] == "r1"] == [True]
 
 
 def put(url, body):
@@ -199,8 +261,7 @@ def test_config_catalog_failure_isolated(server, monkeypatch):
     assert cfg["models"] == ["anthropic/claude-x"]
 
 
-@pytest.mark.parametrize("name", ["planner", "implementer", "reviewer", "documenter", "improver",
-                                  "improvement-implementer", "improvement-reviewer"])
+@pytest.mark.parametrize("name", ["planner", "implementer", "reviewer", "documenter", "improver"])
 def test_agent_file_roundtrip(server, tmp_path, name):
     path = tmp_path / "agents" / f"{name}.md"
     original = path.read_text()
@@ -246,8 +307,7 @@ def test_agent_file_path_safety(server):
             assert e.value.code == 404
 
 
-@pytest.mark.parametrize("name", ["planner", "implementer", "reviewer", "documenter", "improver",
-                                  "improvement-implementer", "improvement-reviewer"])
+@pytest.mark.parametrize("name", ["planner", "implementer", "reviewer", "documenter", "improver"])
 def test_user_file_roundtrip(server, tmp_path, name):
     from sf.agents import TASK_VARIABLES
 
@@ -286,16 +346,14 @@ def test_user_file_unknown_agent(server):
         assert e.value.code == 404
 
 
-def test_portability_artifacts_and_agent_are_discoverable(server, tmp_path):
+def test_legacy_portability_artifacts_stay_readable(server, tmp_path):
+    """No run records portability artifacts any more, but older runs must stay browsable."""
     run_dir = tmp_path / "runs/r1"
     content = '{"verdict":"changes_requested","findings":[]}'
     (run_dir / "portability-1-result.json").write_text(content)
     detail = json.loads(get(server + "/api/runs/r1"))
     assert "portability-1-result.json" in detail["artefacts"]
     assert get(server + "/api/runs/r1/portability-1-result.json") == content
-    cfg = json.loads(get(server + "/api/config"))
-    reviewer = next(a for a in cfg["agents"] if a["name"] == "improvement-reviewer")
-    assert (reviewer["harness"], reviewer["model"], reviewer["thinking"]) == ("codex", "gpt-6.1-sol", "medium")
 
 
 @pytest.fixture

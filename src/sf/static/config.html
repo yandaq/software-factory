@@ -63,7 +63,7 @@ textarea { width: 100%; height: 60vh; resize: vertical; font: 13px/1.5 var(--mon
   <section><table id="agents"></table></section>
   <section id="improvements" aria-labelledby="improvements-title">
     <h2 id="improvements-title">Improvements log</h2>
-    <p class="muted">Historical improvement decisions, newest first. A decision records intent; it does not confirm successful application.</p>
+    <p class="muted">Historical improvement decisions, newest first. A decision records what the improve stage proposed; ideas are applied by editing the prompts on this page.</p>
     <div id="improvements-list" role="status">Loading…</div>
   </section>
 </main>
@@ -86,7 +86,8 @@ async function loadImprovements() {
   document.getElementById("improvements-list").innerHTML = entries.length ? entries.map(i =>
     `<details class="improvement"><summary>${esc(i.title)}</summary>
       <p class="muted">${esc(i.ts)} · Run ${esc(i.run_id)} · Decision: ${esc(i.decision)}</p>
-      ${[ ["Rationale", i.rationale], ["Evidence", i.evidence], ["Proposed change", i.proposed_change],
+      ${[ ["Rationale", i.rationale], ["Evidence", i.evidence], ["File", i.file],
+          ["Proposed change", i.proposed_change],
           ["Note", i.note] ].filter(([, value]) => value).map(([label, value]) =>
         `<p><strong>${label}</strong><br>${esc(value)}</p>`).join("")}</details>`).join("")
     : '<p class="muted">No improvements recorded yet.</p>';

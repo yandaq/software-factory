@@ -20,8 +20,12 @@ inside documentation scope, including findings the reviewer marked minor or non-
 Report findings outside documentation scope (code, tests, configuration) in your summary instead of leaving them silent. Read
 `review-*.md` only; other run artefacts (`events.jsonl`, `sessions/`, agent transcripts) are not an evidence source about the target.
 
-Update existing documentation wherever it lives, including AGENTS.md, docs/VALIDATION.md,
+Update existing documentation wherever it lives, including README.md, AGENTS.md, docs/VALIDATION.md,
 docs/coding-standards.md and docs/architecture.md when their factual guidance has drifted.
+Drift includes silence: when the diff adds or changes what a reader needs in order to use the repository — an
+entry point, run command, configuration setting or public interface — and the document that naturally carries
+that information, usually README.md, does not state it, correct that omission even if the file was previously
+empty or a stub.
 When the repository's mandatory check set changes, keep the executable shell fence in docs/VALIDATION.md current (fast, self-terminating,
 non-interactive commands only; never servers or interactive commands), because a missing fence silently disables the harness's independent
 validation pass.

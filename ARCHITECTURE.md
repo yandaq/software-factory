@@ -5,14 +5,14 @@
 | `cli.py` | Typer commands; lockfile; watch wiring (per-run `RunLock`, `mailbox_*` events, up-front target check); maps outcomes to exit codes |
 | `mailbox.py` | Watch-folder queue only: `todo/`/`doing/`/`done/` layout, oldest-first candidates, settle guard, collision-safe claim/complete and the monitor loop; the caller supplies the per-file executor and the busy reason, poll and settle intervals default to module constants |
 | `workflow.py` | Stage driver, run-id allocation (`YYYYMMDD-HHMMSS`, `-N` suffixed when `runs/<id>` exists), per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge |
-| `improve.py` | Improve phase: automatic improver suggestions, decision history, `improvements.jsonl`, scope enforcement |
+| `improve.py` | Improve phase: read-only improver suggestions, decision history in `improvements.jsonl`; suggestions are never applied, applying one is a human edit in the dashboard |
 | `runner.py` | Shared invocation lifecycle, streamed subprocess boundary, JSON contract validation + re-prompts |
 | `pi.py`, `claude.py`, `codex.py` | Native CLI invocation, session handling, success detection and event/usage normalization; `pi.py` retains original runner imports for compatibility |
 | `run.py` | `RunState` (Pydantic), `events.jsonl` emitter, token aggregation, `RunLock` |
 | `agents.py` | Agent definitions plus fixed-vocabulary task-template validation and literal rendering |
 | `target.py` | `.sf.toml`, starter standards, Git-based Markdown discovery, validation commands |
 | `git.py` | git wrapper |
-| `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/`; settings controls edit frontmatter; Markdown editor edits role definitions and task templates |
+| `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/`; settings controls edit frontmatter; Markdown editor edits role definitions and task templates; a run's retro starts the improve phase again in a child process |
 | `console.py` | Rich live display and terminal prompts (`TerminalHuman`) |
 
 `Workflow` depends on a `Human` and a display protocol, so tests substitute scripted fakes.
@@ -39,12 +39,9 @@
   notes. The trade-off is that the watch's behaviour is proven by two layers of tests - queue-level and
   end-to-end through `cli._watch_loop` - rather than one.
 - **Scope rules are enforced after the fact.** Native permissions do not express every role's allowed paths, so the
-  orchestrator inspects `git status` after the documenter and improvement-implementer. Documenter
-  violations are reverted and fail the stage; improvement-implementer violations are reverted and
-  logged (`scope_violation`) while in-scope edits are kept.
+  orchestrator inspects `git status` after the documenter. Violations are reverted and fail the stage.
 - **Native permissions differ.** Pi and Claude Code use agent tool lists; Codex uses role-based
-  read-only/workspace-write sandboxes with broader shell access. The improvement-implementer receives
-  target write access in addition to the factory workspace. New harnesses deny interactive approval
+  read-only/workspace-write sandboxes with broader shell access. New harnesses deny interactive approval
   requests and surface permission failures without bypassing protections.
 - **Telemetry is normalized, not invented.** `source: agent` events share the dashboard's activity shape
   across harnesses; raw stdout/stderr are retained separately. Legacy `source: pi` events remain readable,
@@ -68,12 +65,10 @@ improvement modules provide context, and `agents.py` substitutes it once. Insert
 requests and logs remain literal. Harness adapters and contract corrections retain
 their existing interfaces. Templates are loaded for each new invocation.
 
-Automatically selected improvements validate all seven definition/template pairs before committing.
-Scope enforcement preserves pre-existing out-of-scope local edits.
-Invalid prompt edits restore the pre-invocation Markdown snapshot and fail the stage;
-target standards edits remain uncommitted for inspection. Structural validation does
-not measure tuning quality; the improver selects evidence-backed changes and the portability
-reviewer judges shared-prompt portability.
+The improver is read-only: it proposes evidence-backed changes and the improve stage records every
+suggestion that survives historical rejection filtering. No agent edits prompt files; a human applies a
+suggestion with the dashboard Markdown editor, which validates the file it saves. Whether a shared-prompt
+idea stays portable across unrelated targets is the judgement of the person applying it.
 
 ## Documenter responsibility
 
@@ -81,7 +76,7 @@ The document stage reduces drift between implemented code and documentation. Exi
 Markdown guidance, including AGENTS.md, validation, coding standards and architecture,
 is eligible for factual updates. New documents remain restricted to docs/. The agent
 must preserve normative requirements and report implementation conflicts; policy tuning
-belongs in the automatic improvement loop. Code and runtime configuration remain outside
+belongs in the improvement suggestions. Code and runtime configuration remain outside
 its stated scope, and the orchestrator owns commits. File checks enforce paths; the
 semantic distinction between factual updates and policy changes is instructed in prompts.
 
@@ -98,37 +93,35 @@ All agent roles use the inventory to find relevant docs, references and scoped l
 An inventory provides visibility, not proof that an agent read or understood every document;
 old plans and descriptive docs are not automatically governing requirements.
 
-Each automatically selected improvement freezes one inventory for context, scope enforcement and target
-commit paths. Only existing discovered target docs are editable; new target docs remain with
-the documenter. Contract-correction retries reuse the current invocation context. Starter
+The improve stage supplies the inventory to the improver, so suggestions can name existing target docs;
+applying them is a human edit. Contract-correction retries reuse the current invocation context. Starter
 standards and validation-command sources do not change; discovery never executes doc content.
 
-## Shared-prompt portability gate
+## Improvement recording
 
-The improve module owns a read-only semantic review between structural prompt validation and
-improvement commits. It pins the improvement-reviewer definition and task template before the
-implementer runs, then supplies exact shared-file before/after contents relative to that invocation's
-snapshot. Pre-existing local edits are not themselves review subjects. The gate forces read-only
-tools and uses the existing harness-neutral runner, contract correction and invocation artifacts.
-Target-only edits skip review; target documentation is outside the semantic review scope.
-Factory improvement commits are restricted to the reviewed shared paths, so unrelated local prompt
-edits are not swept into a target-only improvement.
+The improve stage checks the target back out to the trunk, runs the read-only improver over the merged
+code and the run logs, drops ideas whose title was previously rejected (`idea_filtered`) and appends the
+rest to `improvements.jsonl` with `decision: automatic` and an empty note, then commits only that file.
+Nothing is applied: applying a suggestion means editing the prompt or document it names in the dashboard,
+so the history records what was proposed, not what was done.
 
-Explicit approval with no findings is required. Rejection, invalid output or invocation failure
-restores shared Markdown exactly, removes newly added files and fails the improve stage before
-either repository's improvement commit. Target documentation stays uncommitted for inspection,
-matching existing invalid-prompt behaviour. Structured events and portability input/result artifacts
-retain the applied idea, reviewed changes and reasons; new automatic selections and historical human decisions remain recorded independently.
-
-The trade-off is one additional model invocation per improvement that changes shared prompts.
-The gate enforces review and rollback deterministically, while portability judgement remains model
-based. No automatic implementation repair or decision-history migration is introduced.
+Each recorded idea carries `file`, the one Markdown file it changes. The improver's contract requires a
+repository-relative `.md` path with no absolute or `..` segment, which is the guarantee the dashboard's
+apply action relies on; resolving that path to a real file and writing it stays the dashboard's
+responsibility, so the stage itself still touches neither repository.
 
 Improvement selection never calls the Human protocol. That protocol now covers only optional plan
-approval and loop-cap choices. Every suggestion that survives historical rejection filtering is
-recorded with `decision: automatic` before application, then applied sequentially without a human
-note. This history records selection; commit events and stage results establish application success.
-Portability or implementation failure still stops the stage. No history migration is performed.
+approval and loop-cap choices. Historical human decisions remain readable and no decision history is
+migrated. `portability-*` artifacts recorded by earlier runs stay downloadable from the dashboard, but no
+run produces them.
+
+Re-running the phase over a historical run adds no improvement logic of its own. `sf improve <run-id>` and
+the dashboard's retro button reach the same `stage_improve`: the button starts that command as a child of
+the dashboard server, using the interpreter that serves it, in the factory directory, with its console in
+`runs/<id>/retro.log`. The child owns the run: it takes the run lock, re-enters only the improve stage and
+writes into the run's own state file and event stream, which is how the polled page shows a retro in
+progress and its result afterwards. The server only guards the door: an unknown run is a 404 and a run that
+has not merged, or one whose factory run lock is held by a live process, is a 409 with the reason.
 
 ## Dashboard project documents
 

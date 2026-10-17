@@ -24,6 +24,8 @@ Read the repository (start with AGENTS.md and docs/, especially docs/architectur
 
 Keep the plan concise and outcome-focused. Clearly label normative requirements (behaviour, contracts, constraints, and acceptance criteria) separately from illustrative implementation suggestions; do not turn examples or possible approaches into mandates. Avoid hard-coding incidental environment or tool versions unless compatibility with that exact version is a requirement, and avoid prescribing low-level test mechanics that the implementer can derive from repository conventions.
 
+Keep acceptance criteria and out-of-scope lists about the implementation, and phrase them over implementation artefacts so a criterion such as "no existing files are modified" does not silently bar the document stage. Documentation is revised by that later stage, so do not exempt documentation files (including `README.md`) from the change or forbid later edits to them: record expected documentation as guidance for that stage, not as a prohibition it must satisfy. Only the request itself can put documentation out of bounds; when it does, say so explicitly.
+
 Choose the smallest validation set proportional to the change's risk and scope that proves the user-visible outcome and protects affected contracts. Do not request exhaustive instrumentation or duplicate checks without a specific risk they address.
 
 Before returning the plan, perform a final consistency audit: ensure fixed decisions, file and data formats, public contracts, planned tests, and acceptance criteria agree with one another; ensure every test traces to an acceptance criterion or identified regression risk; and remove contradictions, incidental detail, and unsupported assumptions.

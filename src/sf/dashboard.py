@@ -1,12 +1,14 @@
 """Local web dashboard over `runs/*/` (stdlib HTTP server, polled JSON API).
 
-Run artifacts are read-only apart from whole-run deletion; project Markdown and agent configuration are editable.
+Run artifacts are read-only apart from whole-run deletion and the log a retro writes; project Markdown and
+agent configuration are editable. A run's retro action starts the improve phase again in a child process.
 """
 
 import json
 import re
 import shutil
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,10 +33,14 @@ from sf.agents import (
 from sf.improve import load_decisions
 from sf.models import list_native_models
 from sf.pi import pi_bin
+from sf.run import RunLock
 from sf.target import discover_documentation
 
 STATIC = Path(__file__).parent / "static"
-ARTEFACT_PREFIXES = ("prompt.md", "plan.md", "review-", "portability-", "validation-", "pi-", "claude-code-", "codex-")
+# Console output of a dashboard retro, written by the `sf improve` child process and served as an artefact.
+RETRO_LOG = "retro.log"
+ARTEFACT_PREFIXES = ("prompt.md", "plan.md", "review-", "portability-", "validation-", "pi-", "claude-code-",
+                     "codex-", RETRO_LOG)
 EVENT_TAIL = 200
 # Streaming token deltas: tens of thousands per agent, too dense to be useful as timeline dots.
 TIMELINE_SKIP = {"message_update"}
@@ -46,14 +52,16 @@ def list_runs(runs_dir: Path) -> list[dict[str, Any]]:
         try:
             s = json.loads(state_file.read_text())
         except (OSError, json.JSONDecodeError) as e:
-            runs.append({"run_id": state_file.parent.name, "status": "unreadable", "error": str(e)})
+            runs.append({"run_id": state_file.parent.name, "status": "unreadable", "can_retro": False,
+                         "error": str(e)})
             continue
         usage = s.get("tokens", {}).get("run", {})
         unavailable = "cost" in usage.get("unavailable", [])
         known = "cost" in usage.get("known", ["cost"])
         runs.append(
             {k: s.get(k) for k in ("run_id", "status", "stage", "loop", "target", "cap_reached")}
-            | {"cost": usage.get("cost", 0) if not unavailable or known else None,
+            | {"can_retro": "merge" in s.get("completed", []),
+               "cost": usage.get("cost", 0) if not unavailable or known else None,
                "cost_partial": unavailable and known, "cost_estimated": usage.get("estimated", False)}
         )
     return runs
@@ -109,6 +117,30 @@ def _agent_models(events: list[dict[str, Any]]) -> dict[str, dict[str, str | Non
 
 def _flag(cmd: list[str], name: str) -> str | None:
     return cmd[cmd.index(name) + 1] if name in cmd[:-1] else None
+
+
+class RetroRefused(Exception):
+    """Why a retro cannot start for this run right now."""
+
+
+def start_retro(factory: Path, run_id: str) -> None:
+    """Re-enter the improve phase of a finished run in a child `sf improve` process: suggestions only, never applied.
+
+    The child owns the run the way the CLI does - same run lock, same stage, same `run-state.json` and
+    `events.jsonl` the dashboard already polls - so the retro is live on the dashboard with no new state.
+    Its console output is captured in `retro.log`, served as a run artefact.
+    """
+    run_dir = _run_dir(factory / "runs", run_id)
+    if run_dir is None:
+        raise FileNotFoundError("Run not found")
+    state = json.loads((run_dir / "run-state.json").read_text())
+    if "merge" not in state.get("completed", []):
+        raise RetroRefused(f"run {run_id} has not merged; the improver studies merged code")
+    if (pid := RunLock(factory).holder()) is not None:
+        raise RetroRefused(f"another sf run is active (pid {pid})")
+    with (run_dir / RETRO_LOG).open("wb") as log:
+        subprocess.Popen([sys.executable, "-m", "sf.cli", "improve", run_id], cwd=factory,
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
 
 
 def delete_run(runs_dir: Path, run_id: str) -> bool:
@@ -279,6 +311,12 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                     return self._send(text.encode(), "text/plain; charset=utf-8")
             self.send_error(HTTPStatus.NOT_FOUND)
 
+        def do_POST(self) -> None:
+            parts = [p for p in self.path.split("?")[0].split("/") if p]
+            if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "retro":
+                return self._start_retro(parts[2])
+            self.send_error(HTTPStatus.NOT_FOUND)
+
         def do_DELETE(self) -> None:
             parts = [p for p in self.path.split("?")[0].split("/") if p]
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "document":
@@ -309,6 +347,19 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 "application/json",
                 HTTPStatus.BAD_REQUEST if error else HTTPStatus.OK,
             )
+
+        def _start_retro(self, run_id: str) -> None:
+            try:
+                start_retro(agents_dir.parent, run_id)
+            except FileNotFoundError as e:
+                status, error = HTTPStatus.NOT_FOUND, str(e)
+            except RetroRefused as e:
+                status, error = HTTPStatus.CONFLICT, str(e)
+            except (OSError, ValueError) as e:  # the log could not be written, or the child could not start
+                status, error = HTTPStatus.INTERNAL_SERVER_ERROR, str(e)
+            else:
+                return self._json({"error": None})
+            self._send(json.dumps({"error": error}).encode(), "application/json", status)
 
         def _delete_project_document(self, run_id: str) -> None:
             status = HTTPStatus.BAD_REQUEST

@@ -80,9 +80,6 @@ def invoke(run: Run, agent: AgentDefinition, inv: Invocation, message: str, cwd:
     cmd += ["--json", "--model", agent.model, "-c", f'model_reasoning_effort={json.dumps(agent.thinking)}',
             "-c", f'sandbox_mode={json.dumps(sandbox)}', "-c", 'approval_policy="never"',
             "-c", f'developer_instructions={json.dumps(f"Read and follow the agent role instructions in {body}.")}']
-    if agent.name == "improvement-implementer":
-        # Resume's CLI has no --add-dir flag; the config override works for both forms.
-        cmd += ["-c", f"sandbox_workspace_write.writable_roots={json.dumps([str(run.target)])}"]
     if session:
         cmd += [session]
     cmd += ["-"]

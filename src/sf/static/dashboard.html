@@ -27,6 +27,7 @@ aside h1 { font-size: 15px; margin: 0; padding: 14px 16px; border-bottom: 1px so
 .run .del { position: absolute; top: 8px; right: 10px; border: 0; background: none; color: var(--muted);
             cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: 4px; }
 .run .del:hover { color: var(--bad); background: var(--panel); }
+.run .retro { margin-top: 8px; font-size: 12px; padding: 2px 12px; }
 main { padding: 20px; min-width: 0; }
 #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
            background: rgb(0 0 0 / 0.25); z-index: 10; }
@@ -135,8 +136,15 @@ async function refreshRuns() {
       <div class="id">${esc(r.run_id)}</div>
       <div class="meta"><span class="status s-${esc(r.status)}">${esc(r.status)}</span>
         · ${esc(stageLabel(r.stage))}${r.loop ? " #" + r.loop : ""} · ${r.cost == null ? "N/A" : money(r.cost) + (r.cost_partial ? " (partial)" : "") + (r.cost_estimated ? " (est.)" : "")}</div>
+      <button class="retro"${r.can_retro && r.status !== "running" ? "" : " disabled"}
+        title="${esc(retroHint(r))}">retro</button>
     </div>`).join("") || `<p class="muted" style="padding:16px">No runs yet.</p>`;
 }
+
+// A retro re-runs the improvement agent over a finished run; only a merged run has code for it to study.
+const retroHint = r => r.status === "running" ? "This run is busy; wait for it to finish"
+  : r.can_retro ? "Re-run the improvement agent on this run's logs and merged code: suggestions only, nothing is applied"
+  : "Available once the run has merged";
 
 function tokenRows(tokens) {
   const rows = [
@@ -392,6 +400,23 @@ deleteFile.addEventListener("click", async () => {
   }
 });
 
+// The improvement agent runs as a child process; the next poll shows its stage, events and result.
+async function startRetro(button) {
+  const id = button.closest(".run").dataset.id;
+  button.disabled = true;
+  try {
+    const r = await fetch(`/api/runs/${encodeURIComponent(id)}/retro`, {method: "POST"});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `retro ${id}: HTTP ${r.status}`);
+    selected = id; openArtefact = null; documentMessage = ""; location.hash = id;
+    tick();
+  } catch (err) {
+    console.error(err);
+    alert(err.message);
+    button.disabled = false;
+  }
+}
+
 async function deleteRun(id) {
   if (!confirm(`Delete run ${id} and all its files? This cannot be undone.`)) return;
   const r = await fetch("/api/runs/" + encodeURIComponent(id), {method: "DELETE"});
@@ -405,6 +430,8 @@ document.addEventListener("click", e => {
   const del = e.target.closest(".del");
   if (del) return void deleteRun(del.closest(".run").dataset.id).catch(err => {
     console.error(err); alert(err.message); });
+  const retro = e.target.closest(".retro");
+  if (retro) return void startRetro(retro);
   const doc = e.target.closest(".document");
   if (doc) return void editDocument(doc.dataset.path);
   const run = e.target.closest(".run");

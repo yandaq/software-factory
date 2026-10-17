@@ -137,11 +137,9 @@ class Workflow:
     def _repo_name(self, repo: Path) -> str:
         return "factory" if repo == self.factory else "target"
 
-    def _agent(self, name: str, context: dict[str, str], cwd: Path | None = None, *,
-               documentation_paths: list[str] | None = None) -> dict[str, Any]:
+    def _agent(self, name: str, context: dict[str, str], cwd: Path | None = None) -> dict[str, Any]:
         try:
-            documents = (discover_documentation(self.run.target) if documentation_paths is None
-                         else documentation_paths)
+            documents = discover_documentation(self.run.target)
         except (g.GitError, OSError, ValueError) as e:
             self.run.log("documentation_discovery_failed", agent=name, target=str(self.run.target), error=str(e))
             raise StageFailed(f"documentation discovery for {self.run.target}: {e}") from e

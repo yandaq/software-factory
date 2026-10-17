@@ -186,3 +186,7 @@ def dashboard(
         pass
     finally:
         server.server_close()
+
+
+if __name__ == "__main__":
+    app()  # `python -m sf.cli ...`: the interpreter that serves the dashboard can start a retro with it

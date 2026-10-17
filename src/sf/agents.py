@@ -14,8 +14,6 @@ AGENT_NAMES = (
     "reviewer",
     "documenter",
     "improver",
-    "improvement-implementer",
-    "improvement-reviewer",
 )
 
 Thinking = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -77,8 +75,6 @@ TASK_VARIABLES = {
     "reviewer": ("plan", "trunk"),
     "documenter": ("trunk", "branch", "standards_files"),
     "improver": ("run_id", "target", "trunk", "branch", "run_dir", "agents_dir", "cap_reached", "past_decisions"),
-    "improvement-implementer": ("title", "proposed_change", "rationale", "allowed_files"),
-    "improvement-reviewer": ("idea", "changes"),
 }
 TASK_VARIABLES = {name: (*variables, "documentation") for name, variables in TASK_VARIABLES.items()}
 
@@ -123,9 +119,3 @@ def render_task_text(name: str, text: str, values: dict[str, str]) -> str:
     if set(values) != set(TASK_VARIABLES[name]) or any(not isinstance(v, str) for v in values.values()):
         raise ValueError(f"{name}.user.md: context must supply all declared variables as strings")
     return PLACEHOLDER.sub(lambda match: values[match[1]], text)
-
-
-def validate_agents(agents_dir: Path) -> None:
-    for name in AGENT_NAMES:
-        load_agent(agents_dir, name)
-        load_task_template(agents_dir, name)

@@ -94,8 +94,6 @@ def invoke(run: Run, agent: AgentDefinition, inv: Invocation, message: str, cwd:
            "--model", agent.model, "--effort", agent.thinking, "--tools", ",".join(tools),
            "--allowedTools", ",".join(tools), "--permission-mode", "dontAsk", "--permission-prompts", "none",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands"]
-    if agent.name == "improvement-implementer":
-        cmd += ["--add-dir", str(run.target)]
     if session:
         cmd += ["--resume", session]
     result = ClaudeResult(inv)
