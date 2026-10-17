@@ -48,7 +48,11 @@ def test_install_missing_standards_keeps_existing(tmp_path, no_network):
     assert (target / "AGENTS.md").read_text().startswith("# downloaded")
     assert (target / "docs" / "coding-standards.md").read_text() == "template"
     assert (target / "docs" / "architecture.md").read_text() == "mine"
-    assert not (target / "validation.md").exists() and not (target / "agents.md").exists()
+    # Compare stored names rather than exists(): a case-insensitive filesystem resolves agents.md to AGENTS.md.
+    assert sorted(p.name for p in target.iterdir()) == ["AGENTS.md", "docs"]
+    assert sorted(p.name for p in (target / "docs").iterdir()) == [
+        "VALIDATION.md", "architecture.md", "coding-standards.md",
+    ]
 
 
 def _repo(path, *branches):

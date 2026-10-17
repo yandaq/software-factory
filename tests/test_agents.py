@@ -38,14 +38,14 @@ def test_legacy_agent_defaults_to_pi():
 
 @pytest.mark.parametrize("harness", ["claude-code", "codex"])
 def test_harness_effort_validation(harness):
-    text = (ROOT / "agents" / "planner.md").read_text()
-    assert parse_agent(text.replace("purpose:", f"harness: {harness}\npurpose:", 1)).harness == harness
+    text = (ROOT / "agents" / "planner.md").read_text().replace("harness: pi", f"harness: {harness}", 1)
+    assert parse_agent(text).harness == harness
     with pytest.raises(ValidationError, match="unsupported"):
-        parse_agent(text.replace("purpose:", f"harness: {harness}\npurpose:", 1).replace("thinking: high", "thinking: max"))
+        parse_agent(text.replace("thinking: xhigh", "thinking: max", 1))
 
 
 def test_invalid_harness_rejected():
-    text = (ROOT / "agents" / "planner.md").read_text().replace("purpose:", "harness: unknown\npurpose:", 1)
+    text = (ROOT / "agents" / "planner.md").read_text().replace("harness: pi", "harness: unknown", 1)
     with pytest.raises(ValidationError):
         parse_agent(text)
 
