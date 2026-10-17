@@ -99,6 +99,10 @@ def test_happy_path(factory, target, fake_pi):
     # validation skipped (template has no commands) and logged
     events = [json.loads(l) for l in (run.dir / "events.jsonl").read_text().splitlines()]
     assert any(e.get("type") == "validation_skipped" for e in events)
+    reviewer_task = next(c for c in calls(s) if c["agent"] == "reviewer")["message"]
+    assert "Validation gate (loop 1): SKIPPED" in reviewer_task
+    assert "no validation commands configured" in reviewer_task
+    assert "Validation gate (loop 1): PASS" not in reviewer_task
     # git actions are logged for the dashboard's sf lane
     git_events = [e for e in events if e.get("type", "").startswith("git_")]
     assert {e["type"] for e in git_events} == {"git_checkout", "git_commit", "git_merge"}
@@ -126,6 +130,42 @@ def test_validation_failure_skips_reviewer_and_feeds_back(factory, target, fake_
     second_impl = calls(s)[2]["message"]
     assert "Latest validation output (failed)" in second_impl and "test -f ok" in second_impl
     assert run.state.results["validation-1"] == "failed" and run.state.results["implement"] == "approved in loop 2"
+    assert "[exit 1]" in second_impl
+    assert not (run.dir / "review-1.md").exists()
+    reviewer_task = next(c for c in calls(s) if c["agent"] == "reviewer")["message"]
+    assert "Validation gate (loop 2): PASS" in reviewer_task
+    assert "[exit 0]" in reviewer_task
+    assert "[exit 1]" not in reviewer_task
+
+
+def test_successful_validation_evidence_reaches_reviewer(factory, target, fake_pi):
+    commands = ["printf 'gate {{literal}} passed\\n'", "printf 'second check passed\\n'"]
+    (target / ".sf.toml").write_text("validation = " + json.dumps(commands) + "\n")
+    sh(target, "git", "add", "-A")
+    sh(target, "git", "commit", "-qm", "cfg")
+    s = fake_pi(script())
+    run, wf = start(factory, target)
+    wf.execute()
+    message = next(c for c in calls(s) if c["agent"] == "reviewer")["message"]
+    assert "Validation gate (loop 1): PASS" in message
+    for command in commands:
+        assert command in message
+    assert (run.dir / "validation-1.log").read_text() in message
+    assert message.count("[exit 0]") == 2
+    assert "gate {{literal}} passed" in message
+
+
+def test_reviewer_validation_diagnostics_are_bounded(factory, target, fake_pi):
+    command = "printf START; printf '%20000s' x; printf END"
+    s = fake_pi(script())
+    run, wf = start(factory, target)
+    (run.dir / "plan.md").write_text("Plan")
+    wf._loop(1, [command])
+    message = next(c for c in calls(s) if c["agent"] == "reviewer")["message"]
+    assert command in message
+    assert "diagnostic output truncated; last 12000 characters" in message
+    assert "END[exit 0]" in message
+    assert len(message) < 16000
 
 
 def test_review_findings_fed_to_next_loop(factory, target, fake_pi):

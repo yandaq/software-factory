@@ -223,7 +223,7 @@ class Workflow:
             self.state.max_loops += int(choice)
 
     def _loop(self, n: int, commands: list[str]) -> bool:
-        """One implement → validate → review loop. Returns True when the reviewer approves."""
+        """Implement, validate, then review with current-loop gate evidence; failures bypass review."""
         self.run.log("loop_start")
         plan = (self.run.dir / "plan.md").read_text()
         feedback = ""
@@ -238,6 +238,7 @@ class Workflow:
         self._commit_target(f"implement (loop {n})")
         self.run.log("implemented", summary=out.get("summary"))
 
+        validation_report = f"Validation gate (loop {n}): SKIPPED — no validation commands configured."
         if not commands:
             self.run.log("validation_skipped", reason="no commands in docs/VALIDATION.md")
         else:
@@ -247,10 +248,18 @@ class Workflow:
             if not ok:
                 self._checkpoint(f"loop {n} validation failed")
                 return False
+            diagnostics = (self.run.dir / f"validation-{n}.log").read_text()
+            if len(diagnostics) > 12000:
+                diagnostics = "[diagnostic output truncated; last 12000 characters]\n" + diagnostics[-12000:]
+            validation_report = (
+                f"Validation gate (loop {n}): PASS — all executed commands exited 0.\n\n"
+                "Executed commands:\n" + "\n".join(f"$ {command}" for command in commands)
+                + "\n\nRunner diagnostic output:\n" + diagnostics
+            )
 
         out = self._agent(
             "reviewer",
-            {"plan": plan, "trunk": self.state.trunk},
+            {"plan": plan, "trunk": self.state.trunk, "validation_report": validation_report},
         )
         (self.run.dir / f"review-{n}.md").write_text(render_review(n, out))
         self.state.results[f"review-{n}"] = out["verdict"]

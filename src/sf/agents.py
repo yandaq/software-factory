@@ -72,7 +72,7 @@ def load_agent(agents_dir: Path, name: str) -> AgentDefinition:
 TASK_VARIABLES = {
     "planner": ("request",),
     "implementer": ("plan", "feedback"),
-    "reviewer": ("plan", "trunk"),
+    "reviewer": ("plan", "trunk", "validation_report"),
     "documenter": ("trunk", "branch", "standards_files"),
     "improver": ("run_id", "target", "trunk", "branch", "run_dir", "agents_dir", "cap_reached", "past_decisions"),
 }

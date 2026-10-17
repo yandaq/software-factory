@@ -13,12 +13,17 @@ Single braces are literal. Inserted values are never interpreted as templates.
 |---|---|
 | planner | request |
 | implementer | plan, feedback |
-| reviewer | plan, trunk |
+| reviewer | plan, trunk, validation_report |
 | documenter | trunk, branch, standards_files |
 | improver | run_id, target, trunk, branch, run_dir, agents_dir, cap_reached, past_decisions |
 
 `feedback` includes the latest failed validation output, otherwise the latest review
 findings, otherwise an empty string. Other values are provided by the orchestrator for the current task.
+`validation_report` supplies the reviewer's current-loop runner gate outcome: PASS with executed
+commands and actual diagnostic output (last 12,000 characters, explicitly marked when truncated), or
+SKIPPED when no commands are configured. Failed gates bypass review and feed failure evidence to the
+next implementer. Supplied results are attributed to the runner, not the reviewer, and do not replace
+independent code/acceptance review or permit reading run artifacts or transcripts.
 Missing or empty task templates fail visibly; there is no embedded fallback.
 
 The dashboard exposes role and task files separately and lists required placeholders.

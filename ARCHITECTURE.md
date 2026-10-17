@@ -66,6 +66,12 @@ improvement modules provide context, and `agents.py` substitutes it once. Insert
 requests and logs remain literal. Harness adapters and contract corrections retain
 their existing interfaces. Templates are loaded for each new invocation.
 
+The implement loop supplies the reviewer with current-loop runner validation evidence: executed
+commands, PASS and actual diagnostic output capped to its last 12,000 characters with a truncation
+notice, or SKIPPED for an empty command set. Failed validation still bypasses review and feeds the
+next implementer. This narrow evidence channel grants no extra tools or transcript access; the
+reviewer attributes gate checks to the runner and independently reviews code and acceptance criteria.
+
 The improver is read-only: it proposes evidence-backed changes and the improve stage records every
 suggestion that survives historical rejection filtering. A human can edit a suggestion manually or click
 play in config to invoke the configured implementer against software-factory. The improver can also

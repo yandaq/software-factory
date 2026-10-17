@@ -84,6 +84,7 @@ def test_reviewer_task_requires_current_documentation_review():
     text = render_task(ROOT / "agents", "reviewer", {
         "plan": "The full plan",
         "trunk": "main",
+        "validation_report": "Validation gate (loop 1): PASS",
         "documentation": "Target documentation inventory",
     })
     assert text.startswith(
@@ -96,6 +97,8 @@ def test_reviewer_task_requires_current_documentation_review():
         "of its current contents. Do not defer this accuracy check merely because a later "
         "documentation stage exists."
     )
+    assert "Validation gate (loop 1): PASS" in text
+    assert "runner-generated evidence, not checks you personally executed" in text
     assert text.endswith(
         "\n\n# Plan\n\nThe full plan\n\n# Available target documentation\n\n"
         "Target documentation inventory\n\n"
