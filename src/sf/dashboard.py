@@ -79,7 +79,7 @@ def run_detail(runs_dir: Path, run_id: str) -> dict[str, Any] | None:
     lines = events_path.read_text().splitlines() if events_path.exists() else []
     records = [json.loads(line) for line in lines]
     events = [e for e in records if e.get("source") == "sf"][-EVENT_TAIL:]
-    # New runs retain Pi's native events as well as normalized events. Prefer normalized per invocation.
+    # Historical runs may contain both Pi and normalized events. Prefer normalized per invocation.
     normalized = {(e.get("stage"), e.get("agent"), e.get("invocation"))
                   for e in records if e.get("source") == "agent"}
     visible = [e for e in records if e.get("source") != "pi"

@@ -61,9 +61,15 @@ def test_native_catalog(native_cli, harness, expected):
 @pytest.mark.parametrize('mode', ['error', 'malformed', 'exit', 'timeout', 'empty'])
 def test_native_discovery_failure(native_cli, monkeypatch, harness, mode):
     monkeypatch.setenv('MODEL_TEST_MODE', mode)
-    models, error = list_native_models(harness, timeout=0.2)
+    # Only the timeout case tests a short deadline; other cases must reach their intended error.
+    timeout = 0.2 if mode == 'timeout' else 2
+    models, error = list_native_models(harness, timeout=timeout)
     assert models == []
     assert harness in error
+    if mode == 'timeout':
+        assert 'timed out' in error
+    else:
+        assert 'timed out' not in error
     if mode == 'error':
         assert 'not authenticated' in error
     if mode == 'exit':

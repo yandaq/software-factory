@@ -45,7 +45,8 @@
   read-only/workspace-write sandboxes with broader shell access. New harnesses deny interactive approval
   requests and surface permission failures without bypassing protections.
 - **Telemetry is normalized, not invented.** `source: agent` events share the dashboard's activity shape
-  across harnesses; raw stdout/stderr are retained separately. Legacy `source: pi` events remain readable,
+  across harnesses; Pi events are emitted only once, as `source: agent`, in the shared run log.
+  Raw stdout/stderr are retained separately. Legacy `source: pi` events remain readable,
   but are excluded from dashboard activity when normalized events exist for that invocation. Invocation
   state records harness/model/effort/session; usage records known/unavailable fields and estimated cost.
   Aggregates retain availability so missing cost/context is never shown as a measured zero. Codex input

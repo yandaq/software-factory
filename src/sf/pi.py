@@ -86,7 +86,6 @@ def invoke(
     result = PiResult()
 
     def track(event: dict[str, Any]) -> list[dict[str, Any]]:
-        run.emit("pi", {"agent": agent.name, "invocation": inv.n, "event": event})
         _track(result, inv, event)
         return [event]
 
