@@ -248,7 +248,8 @@ capability tags auto-detected from the harness CLIs found (`SF_PI`/`SF_CLAUDE`/`
 `--caps`, and runs `--concurrency` worker threads (default 1). A worker claims the oldest queued job whose
 required caps it has with `SELECT … FOR UPDATE SKIP LOCKED`, holds it under a lease renewed by a heartbeat
 thread, and waits on `LISTEN/NOTIFY` between polls. SIGINT/SIGTERM stops claiming and lets running jobs
-finish; a second signal exits at once and the abandoned leases expire. Progress is one JSON object per
+finish; a second signal exits at once and the abandoned leases expire. A runner starting under an id that still
+holds claimed jobs (a killed or restarted process) requeues them at once as infra retries. Progress is one JSON object per
 stdout line.
 
 **Working tree handoff.** A job runs in a fresh clone of the target remote made with `git clone --reference`

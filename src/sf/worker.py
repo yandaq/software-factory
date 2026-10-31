@@ -50,8 +50,8 @@ def serve(factory: Path, runner_id: str, host: str, caps: list[str], concurrency
     conn = store.connect(db_url)
     try:
         store.migrate(conn)
-        queue.register_runner(conn, runner_id, host, caps, concurrency)
-        log(event="runner_started", runner=runner_id, caps=caps, concurrency=concurrency)
+        orphans = queue.register_runner(conn, runner_id, host, caps, concurrency)
+        log(event="runner_started", runner=runner_id, caps=caps, concurrency=concurrency, orphans=orphans)
         workers_done = threading.Event()
         beat = threading.Thread(target=_heartbeat, args=(conn, runner_id, lease_seconds, heartbeat_seconds,
                                                          workers_done, log), daemon=True)

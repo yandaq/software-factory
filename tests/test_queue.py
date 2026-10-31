@@ -121,6 +121,16 @@ def test_heartbeat_extends_lease(db, run_id):
         queue.heartbeat(db, "nobody")
 
 
+def test_reregistering_runner_requeues_jobs_its_previous_process_held(db, run_id):
+    queue.register_runner(db, "a", "h", [])
+    job = queue.enqueue(db, run_id, "plan")
+    queue.claim(db, "a", [], lease_seconds=3600)
+    assert queue.register_runner(db, "a", "h", []) == [{"job_id": job, "status": "queued"}]
+    row = db.execute("SELECT status, claimed_by, infra_retries FROM stage_jobs WHERE id = %s", (job,)).fetchone()
+    assert row == {"status": "queued", "claimed_by": None, "infra_retries": 1}
+    assert queue.register_runner(db, "a", "h", []) == []
+
+
 def test_notify_wakes_waiter(db, db_url, run_id):
     waiter = store.connect(db_url)
     queue.listen(waiter)

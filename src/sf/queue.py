@@ -19,13 +19,26 @@ STALE_AFTER_SECONDS = 120  # several missed heartbeats (runners beat every 15 s 
 
 
 def register_runner(conn: psycopg.Connection, runner_id: str, host: str, caps: list[str],
-                    concurrency: int = 1) -> None:
-    conn.execute(
-        "INSERT INTO runners (id, host, caps, concurrency, last_heartbeat) VALUES (%s, %s, %s, %s, now())"
-        " ON CONFLICT (id) DO UPDATE SET host = EXCLUDED.host, caps = EXCLUDED.caps,"
-        " concurrency = EXCLUDED.concurrency, last_heartbeat = now()",
-        (runner_id, host, caps, concurrency),
-    )
+                    concurrency: int = 1, max_infra_retries: int = MAX_INFRA_RETRIES) -> list[dict[str, Any]]:
+    """Register (or re-register) a runner; returns [{job_id, status}] for jobs a previous process left behind.
+
+    A starting runner holds no jobs, so any still claimed under its id were orphaned by an earlier process
+    with the same id (killed or restarted). They are requeued at once, as for an expired lease; otherwise
+    this process's heartbeats would keep extending their leases forever.
+    """
+    with conn.transaction():
+        conn.execute(
+            "INSERT INTO runners (id, host, caps, concurrency, last_heartbeat) VALUES (%s, %s, %s, %s, now())"
+            " ON CONFLICT (id) DO UPDATE SET host = EXCLUDED.host, caps = EXCLUDED.caps,"
+            " concurrency = EXCLUDED.concurrency, last_heartbeat = now()",
+            (runner_id, host, caps, concurrency),
+        )
+        orphans = conn.execute(
+            "SELECT * FROM stage_jobs WHERE status = 'claimed' AND claimed_by = %s ORDER BY id FOR UPDATE",
+            (runner_id,),
+        ).fetchall()
+        return [{"job_id": j["id"], "status": _retry_or_fail(conn, j, "runner restarted", max_infra_retries)}
+                for j in orphans]
 
 
 def heartbeat(conn: psycopg.Connection, runner_id: str, lease_seconds: float = 60) -> None:
