@@ -14,7 +14,19 @@ from sf.target import (
 def test_validation_commands_from_fenced_blocks(tmp_path):
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "VALIDATION.md").write_text("x\n```sh\n# comment\necho a\n\necho b\n```\n```python\nno\n```\n")
-    assert validation_commands(tmp_path, TargetConfig()) == ["echo a", "echo b"]
+    assert validation_commands(tmp_path, TargetConfig()) == ["set -eo pipefail\n# comment\necho a\n\necho b"]
+
+
+def test_validation_block_runs_as_one_script(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "VALIDATION.md").write_text(
+        "```sh\nN=3\nfor i in $(seq 1 $N); do\n  echo \"i=$i\"\ndone\nfalse\necho never\n```\n```sh\n# only a comment\n```\n")
+    commands = validation_commands(tmp_path, TargetConfig())
+    assert len(commands) == 1
+    log = tmp_path / "v.log"
+    assert not run_validation(tmp_path, commands, log)
+    text = log.read_text()
+    assert "i=1\ni=2\ni=3\n[exit 1]" in text
 
 
 def test_sf_toml_overrides(tmp_path):

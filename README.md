@@ -164,7 +164,7 @@ trunk = "main"                      # default: main if it exists, else master
 validation = ["uv run pytest -q"]   # overrides the commands in docs/VALIDATION.md
 ```
 
-Without an override, validation runs every line of the ```` ```sh ```` blocks in the target's `docs/VALIDATION.md`. The downloaded default has none, so set `validation` here to get checks.
+Without an override, validation runs each ```` ```sh ```` block in the target's `docs/VALIDATION.md` as one bash script (with `set -eo pipefail`), so variables, loops and traps can span lines. The downloaded default has none, so set `validation` here to get checks.
 
 ## Development
 

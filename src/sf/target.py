@@ -116,10 +116,10 @@ def validation_commands(target: Path, config: TargetConfig) -> list[str]:
     path = target / VALIDATION_FILE
     if not path.exists():
         return []
-    commands = []
-    for block in _FENCE.findall(path.read_text()):
-        commands += [ln.strip() for ln in block.splitlines() if ln.strip() and not ln.strip().startswith("#")]
-    return commands
+    # Each ```sh block is one script, so variables, loops and traps span its lines; `set -e` keeps
+    # a failing line from being masked by the block's last command.
+    return [f"set -eo pipefail\n{block.strip()}" for block in _FENCE.findall(path.read_text())
+            if any(ln.strip() and not ln.strip().startswith("#") for ln in block.splitlines())]
 
 
 def run_validation(target: Path, commands: list[str], log_path: Path) -> bool:
@@ -127,7 +127,7 @@ def run_validation(target: Path, commands: list[str], log_path: Path) -> bool:
     with log_path.open("w") as log:
         for cmd in commands:
             proc = subprocess.run(cmd, shell=True, cwd=target, capture_output=True, text=True, check=False,
-                          env={**os.environ, **NO_REPO_ARTIFACTS})
+                          executable="/bin/bash", env={**os.environ, **NO_REPO_ARTIFACTS})
             log.write(f"$ {cmd}\n{proc.stdout}{proc.stderr}[exit {proc.returncode}]\n\n")
             if proc.returncode != 0:
                 ok = False
