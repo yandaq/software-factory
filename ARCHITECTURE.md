@@ -95,9 +95,9 @@ wrong place.
 - **Apply runs in the dashboard host.** In DB mode an improvement application runs in a dashboard thread, so
   that host needs the harness CLIs and push credentials for the factory remote. A non-fast-forward push fails
   the application (retryable) rather than rebasing it.
-- **Config edits reach queued runs only once pushed.** The config page edits the dashboard's local checkout,
-  while new queued runs snapshot agents/templates from a fresh clone of the factory origin when it has one;
-  local edits apply to queued runs only after they are committed and pushed. Improve jobs review the run's
+- **Queued runs snapshot the submitter's working tree.** New queued runs freeze agents/templates from the
+  submitting checkout (uncommitted config-page edits included), but improvements applied in DB mode are pushed
+  to the factory origin, so they reach new runs only after that checkout pulls them. Improve jobs review the run's
   snapshotted agents alongside the latest factory source. When a run has no recorded factory remote
   (`factory_remote` NULL) the local factory path is used instead.
 - **Artifacts outlive their run.** Deleting a queued run removes its database rows, not its objects in the

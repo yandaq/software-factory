@@ -576,11 +576,20 @@ def render_review(n: int, out: dict[str, Any]) -> str:
 
 # -- queued driver: stage jobs on the Postgres queue -----------------------------------------
 def required_caps(config: dict[str, Any], stage: str) -> list[str]:
-    """Capabilities a runner needs for `stage`: the harness of its agent in the run's config snapshot."""
+    """Capabilities a runner needs for `stage`: the harness of its agent in the run's config snapshot and,
+    for Pi, that agent's model (runners advertise only models their Pi has auth for; see worker.detect_caps)."""
     agent = STAGE_AGENT.get(stage)
     if agent is None:
         return []
-    return [HARNESS_CAP[parse_agent(config["agents"][f"{agent}.md"]).harness]]
+    definition = parse_agent(config["agents"][f"{agent}.md"])
+    caps = [HARNESS_CAP[definition.harness]]
+    if definition.harness == "pi":
+        caps.append(pi_model_cap(definition.model))
+    return caps
+
+
+def pi_model_cap(model: str) -> str:
+    return f"model:pi:{model}"
 
 
 def start_run(conn: Any, state: RunState) -> Step:
@@ -669,20 +678,36 @@ def _apply_queued(conn: Any, state: RunState, step: Step, job_id: int | None) ->
     store.append_event(conn, event, job_id=job_id)
 
 
-def submit_run(conn: Any, factory: Path, target: Path, prompt: str) -> RunState:
-    """Create a queued run (state, config snapshot, prompt.md) and enqueue its first job, atomically."""
+def submit_run(conn: Any, factory: Path, target: Path, prompt: str, remote: str | None = None) -> RunState:
+    """Create a queued run (state, config snapshot, prompt.md) and enqueue its first job, atomically.
+
+    `remote` (when `target` is a throwaway clone) is recorded as the run's target and its runners' remote.
+    """
     target = target.resolve()
-    config = store.snapshot_config(factory, target)
+    config = store.snapshot_config(factory, target, remote)
     with conn.transaction():
         run_id = store.new_run_id(conn)
         trunk = resolve_trunk(target, load_config(target))
-        state = RunState(run_id=run_id, target=str(target), trunk=trunk, branch=f"sf/{run_id}")
+        state = RunState(run_id=run_id, target=remote or str(target), trunk=trunk, branch=f"sf/{run_id}")
         store.create_run(conn, state, config)
         store.put_document(conn, run_id, "prompt.md", prompt.rstrip() + "\n")
         store.append_event(conn, {"ts": now(), "run_id": run_id, "stage": state.stage, "source": "sf",
-                                  "type": "run_created", "target": str(target), "trunk": trunk})
+                                  "type": "run_created", "target": state.target, "trunk": trunk})
         start_run(conn, state)
     return state
+
+
+def submit_remote_run(conn: Any, factory: Path, url: str, prompt: str) -> RunState:
+    """`submit_run` against a target known only by its clone URL, read from a throwaway clone of it."""
+    root = g.cache_dir() / "submit"
+    root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="sf-submit-", dir=root) as tmp:
+        clone = Path(tmp) / "target"
+        try:
+            g.clone_latest(url, clone)
+        except g.InfraError as e:
+            raise g.GitError(f"cannot clone {url}: {e}") from e
+        return submit_run(conn, factory, clone, prompt, remote=url)
 
 
 def resume_queued(conn: Any, run_id: str) -> dict[str, Any]:

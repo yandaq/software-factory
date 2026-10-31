@@ -5,7 +5,6 @@ database has not yet recorded in `schema_version`, so it is safe to call on ever
 """
 
 import os
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -98,6 +97,16 @@ MIGRATIONS: tuple[str, ...] = (
     );
     ALTER TABLE run_config ADD COLUMN factory_remote text;
     """,
+    # Repositories the dashboard can queue runs against: `url` as configured (bare `owner/repo` expanded),
+    # `key` its normalised form (git.target_key) so one repository is configured once.
+    """
+    CREATE TABLE targets (
+        id bigserial PRIMARY KEY,
+        url text NOT NULL,
+        key text NOT NULL UNIQUE,
+        created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
 )
 
 
@@ -132,27 +141,23 @@ def new_run_id(conn: psycopg.Connection) -> str:
     return run_id
 
 
-def snapshot_config(factory: Path, target: Path) -> dict[str, Any]:
+def snapshot_config(factory: Path, target: Path, remote: str | None = None) -> dict[str, Any]:
     """Agent definitions, task templates, target `.sf.toml` + remote URL and factory commit, frozen for one run.
 
-    When the factory checkout has an `origin`, agents and templates come from a fresh clone of its default
-    branch, so a run uses the latest pushed factory state (including applied improvements) rather than the
-    submitter's possibly stale or uncommitted copy. Without an `origin` (one machine) the checkout is read.
+    Agents and templates are read from the submitting `factory` checkout's working tree (including
+    uncommitted edits, e.g. from the dashboard's config page); `factory_sha` is its HEAD. `factory_remote`
+    (its `origin`) is recorded for improve jobs and applications, which clone it. `remote` overrides the
+    target's own remote URL (a run submitted from a throwaway clone of it).
     """
-    remote = g.git(factory, "remote", "get-url", "origin", check=False).strip() or None
-    with tempfile.TemporaryDirectory(prefix="sf-factory-") as tmp:
-        source = factory
-        if remote:
-            source = Path(tmp) / "factory"
-            g.clone_latest(remote, source)
-        return {
-            "agents": {p.name: p.read_text() for p in sorted((source / "agents").glob("*.md"))},
-            "templates": {p.name: p.read_text() for p in sorted((source / "templates").iterdir()) if p.is_file()},
-            # `remote`: where runners on any machine fetch and push this target (see git.target_remote).
-            "target_config": load_target_config(target).model_dump() | {"remote": g.target_remote(target)},
-            "factory_sha": g.git(source, "rev-parse", "HEAD").strip(),
-            "factory_remote": remote,  # None: no origin; runners then use their own factory checkout
-        }
+    return {
+        "agents": {p.name: p.read_text() for p in sorted((factory / "agents").glob("*.md"))},
+        "templates": {p.name: p.read_text() for p in sorted((factory / "templates").iterdir()) if p.is_file()},
+        # `remote`: where runners on any machine fetch and push this target (see git.target_remote).
+        "target_config": load_target_config(target).model_dump() | {"remote": remote or g.target_remote(target)},
+        "factory_sha": g.git(factory, "rev-parse", "HEAD").strip(),
+        # None: no origin; runners then use their own factory checkout
+        "factory_remote": g.git(factory, "remote", "get-url", "origin", check=False).strip() or None,
+    }
 
 
 def create_run(conn: psycopg.Connection, state: RunState, config: dict[str, Any]) -> None:
@@ -238,6 +243,32 @@ def artifact_prefixes(conn: psycopg.Connection, run_id: str) -> list[dict[str, A
         " WHERE j.run_id = %s AND r.artifact_prefix IS NOT NULL ORDER BY j.id",
         (run_id,),
     ).fetchall()
+
+
+# -- configured targets (dashboard submission) -----------------------------------------------
+def list_targets(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    """`{id, url, key, created_at}` of every configured target, oldest first."""
+    return [r | {"created_at": str(r["created_at"])}
+            for r in conn.execute("SELECT id, url, key, created_at FROM targets ORDER BY id")]
+
+
+def add_target(conn: psycopg.Connection, url: str, key: str) -> dict[str, Any]:
+    """Insert a target; ValueError when one with the same key is already configured."""
+    try:
+        row = conn.execute("INSERT INTO targets (url, key) VALUES (%s, %s) RETURNING id, url, key, created_at",
+                           (url, key)).fetchone()
+    except psycopg.errors.UniqueViolation as e:
+        raise ValueError(f"{key} is already a configured target") from e
+    return row | {"created_at": str(row["created_at"])}
+
+
+def delete_target(conn: psycopg.Connection, target_id: int) -> bool:
+    """Remove a target from the list (its runs remain); False when there is no such target."""
+    return conn.execute("DELETE FROM targets WHERE id = %s", (target_id,)).rowcount == 1
+
+
+def get_target(conn: psycopg.Connection, key: str) -> dict[str, Any] | None:
+    return conn.execute("SELECT id, url, key FROM targets WHERE key = %s", (key,)).fetchone()
 
 
 # -- improvement log (queued runs); record shape and identity as in docs/improvements-log.md ----

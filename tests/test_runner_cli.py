@@ -80,6 +80,34 @@ def test_detect_caps_uses_harness_env(monkeypatch, fake_pi, fake_harness):
     assert set(worker.detect_caps()) >= set(ALL_CAPS)
 
 
+def test_detect_caps_advertises_only_listed_pi_models(monkeypatch, fake_pi):
+    monkeypatch.setenv("FAKE_PI_MODELS", "halogen/q3,anthropic/claude-x")
+    caps = worker.detect_caps(log=lambda **r: pytest.fail(f"unexpected log {r}"))
+    assert {"harness:pi", "model:pi:halogen/q3", "model:pi:anthropic/claude-x"} <= set(caps)
+    assert not any(c.startswith("model:pi:openai/") for c in caps)
+
+
+def test_detect_caps_logs_failed_pi_listing_and_adds_no_model_caps(monkeypatch, fake_pi):
+    monkeypatch.setenv("FAKE_PI_LIST_EXIT", "1")
+    logs = []
+    caps = worker.detect_caps(log=lambda **r: logs.append(r))
+    assert "harness:pi" in caps and not any(c.startswith("model:") for c in caps)
+    assert logs[0]["event"] == "pi_models_failed" and "list-models" in logs[0]["error"]
+
+
+def test_runner_without_the_agents_pi_model_cannot_claim(db, factory, target):
+    config = store.snapshot_config(factory, target)
+    state = submit_run(db, factory, target, "x")
+    caps = workflow.required_caps(config, "plan")
+    assert caps == ["harness:pi", "model:pi:fake/model"]
+    queue.enqueue(db, state.run_id, "plan", required_caps=caps)
+    other = ["harness:pi", "model:pi:openai/other"]
+    queue.register_runner(db, "no-auth", "host", other)
+    assert all(j["stage"] != "plan" for j in iter(lambda: queue.claim(db, "no-auth", other), None))
+    queue.register_runner(db, "ok", "host", ALL_CAPS)
+    assert queue.claim(db, "ok", ALL_CAPS)["stage"] == "plan"
+
+
 class Serve:
     """worker.serve in a thread, logging into a list."""
 

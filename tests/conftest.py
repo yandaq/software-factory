@@ -30,13 +30,13 @@ def factory(tmp_path: Path) -> Path:
     shutil.copytree(ROOT / "agents", f / "agents")
     shutil.copytree(ROOT / "templates", f / "templates")
     shutil.copy(ROOT / ".gitignore", f / ".gitignore")
-    # Workflow fixtures use fake Pi unless a test explicitly selects a native harness.
+    # Workflow fixtures use fake Pi (and its default `fake/model`) unless a test selects a native harness.
     from sf.agents import AGENT_NAMES, load_agent
     from sf.dashboard import set_agent_config
 
     for name in AGENT_NAMES:
         agent = load_agent(f / "agents", name)
-        assert set_agent_config(f / "agents", name, agent.model, agent.thinking, "pi") is None
+        assert set_agent_config(f / "agents", name, "fake/model", agent.thinking, "pi") is None
     init_repo(f)
     return f
 

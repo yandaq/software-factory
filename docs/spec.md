@@ -213,8 +213,8 @@ knows the run id: its latest failed stage job is re-enqueued and the run marked 
 
 ## 9. Distributed (queued) mode
 
-With `SF_DATABASE_URL` set, runs can be queued instead of driven by one local process. Local `sf run`,
-`sf watch` and the file-mode dashboard are unchanged and need no database.
+With `SF_DATABASE_URL` set, runs can be queued instead of driven by one local process. Without it, `sf run`,
+`sf watch` and the dashboard work from local files and need no database.
 
 **Coordination.** Postgres holds run state, the `run_config` snapshot, events, run documents (prompt, plan,
 reviews), stage jobs and results, runners and the improvement log; there is no separate orchestrator
@@ -222,13 +222,22 @@ process. Schema migrations are applied by `store.migrate` whenever a command con
 
 **Submission.** `sf submit <target> [<prompt-file>|-]` (stdin by default) checks the target, creates the run
 and snapshots into `run_config` the agent definitions, task templates and target config — including the
-target's `origin` remote (its local path when it has none) — plus the factory remote. When the factory has an origin, agents and templates
-are read from a fresh clone of it, so only pushed factory changes reach new runs. Every stage of a run uses
-that snapshot. `--approve-plan` is refused in v1. It prints the run id.
+target's `origin` remote (its local path when it has none) — plus the factory remote. Agents and templates are read from the submitting
+factory checkout's working tree (uncommitted edits included); `factory_sha` is its HEAD. Every stage of a run uses
+that snapshot. `--approve-plan` is refused in v1. It prints the run id. `sf watch` in this mode submits each
+dropped prompt the same way and moves it to `done/` once queued.
+
+**Targets.** The `targets` table lists repositories by clone URL (bare `owner/repo` becomes
+`git@github.com:owner/repo.git`, validated with `git ls-remote`) and a normalised key such as
+`github.com/owner/repo`. The dashboard manages them on `/config`, filters runs by the key of the run's
+snapshotted remote, and submits jobs for a selected target: it makes a throwaway clone of the URL in the clone
+cache, reads `.sf.toml` and the trunk from it, and queues the run with the configured URL as its remote.
+Deleting a target leaves its runs untouched.
 
 **Stage jobs.** Each stage of a run (branch → prompt → plan → implement ⇄ review → document → merge → improve)
 is one `stage_jobs` row carrying `run_id`, `stage`, `attempt`, small `inputs` (e.g. review findings) and
-`required_caps` (`harness:<pi|claude|codex>` from the stage's agent). The stage graph is
+`required_caps` (`harness:<pi|claude|codex>` from the stage's agent, plus `model:pi:<provider/model>` for a Pi
+agent; runners advertise one per model `pi --list-models` reports at startup, i.e. those Pi has auth for). The stage graph is
 `workflow.advance()`, the same function the local driver uses; the runner calls it inside the completion
 transaction that records the result, saves the state and inserts the next job (or ends or parks the run).
 Contract-correction retries stay inside the job, on the same runner, because harness sessions are
@@ -270,7 +279,7 @@ from the dashboard is described in [dashboard-api.md](dashboard-api.md) and
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `SF_DATABASE_URL` | submit, runner, resume, dashboard | Postgres connection string (libpq URL) |
+| `SF_DATABASE_URL` | submit, watch, runner, resume, dashboard | Postgres connection string (libpq URL) |
 | `SF_S3_ENDPOINT`, `SF_S3_REGION`, `SF_S3_BUCKET`, `SF_S3_ACCESS_KEY`, `SF_S3_SECRET_KEY` | runner, dashboard | S3-compatible artifact store (production: Garage) |
 | `SF_CACHE_DIR` | runner, dashboard apply | Clone cache directory (default `~/.cache/sf`) |
 | `SF_PI`, `SF_CLAUDE`, `SF_CODEX` | runner | Harness CLI paths; also drive capability detection |

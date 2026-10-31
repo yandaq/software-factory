@@ -49,6 +49,15 @@ dialog h2 { margin-top: 0; font-size: 18px; }
 textarea { width: 100%; height: 60vh; resize: vertical; font: 13px/1.5 var(--mono); }
 .editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .msg { font-size: 12px; }
+#targets h2 { margin-top: 0; font-size: 18px; }
+#target-form { display: flex; gap: 8px; margin-top: 12px; }
+#target-url { flex: 1; font-family: var(--mono); font-size: 13px; }
+.target-key { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.target-del { border: 0; background: none; color: var(--muted); padding: 0 4px; }
+.target-del:hover { color: var(--bad); }
+.spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .ok { color: var(--ok); } .err { color: var(--bad); } .muted { color: var(--muted); }
 @media (max-width: 640px) {
   tr { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
@@ -67,6 +76,15 @@ textarea { width: 100%; height: 60vh; resize: vertical; font: 13px/1.5 var(--mon
     Unsupported dashboard metrics display N/A.</p>
   <p id="status"></p>
   <section><table id="agents"></table></section>
+  <section id="targets" aria-labelledby="targets-title" hidden>
+    <h2 id="targets-title">Targets</h2>
+    <p class="muted">Repositories the factory works on. Jobs are queued against a target from the runs page.
+      Enter <code>owner/repo</code> (GitHub over SSH), an https URL or an SSH URL; it is checked with <code>git ls-remote</code>.</p>
+    <div id="targets-list">Loading…</div>
+    <form id="target-form"><input id="target-url" aria-label="Target repository URL"
+      placeholder="owner/repo, https://… or git@…" autocomplete="off"><button id="target-add" disabled>Add</button></form>
+    <p id="targets-status" class="msg" role="status"></p>
+  </section>
   <section id="improvements" aria-labelledby="improvements-title">
     <h2 id="improvements-title">Improvements log</h2>
     <p class="muted">Improvement suggestions, newest first. Play runs the implementation agent in software-factory, preserving existing edits. Successful implementations automatically commit all factory changes, including existing edits, on the current branch; nothing is pushed. Python runner suggestions appear in red. Restart running factory processes after applying Python changes. Failed attempts may leave partial changes; inspect them before retrying.</p>
@@ -339,6 +357,77 @@ saveFile.addEventListener("click", async () => {
     saveFile.disabled = content.value === original;
   }
 });
+
+// Targets live in Postgres, so the section only appears when the dashboard runs in queued (DB) mode.
+const targetUrl = document.getElementById("target-url");
+const targetAdd = document.getElementById("target-add");
+const targetsStatus = document.getElementById("targets-status");
+let targetBusy = false;
+
+async function loadTargets() {
+  const r = await fetch("/api/targets");
+  const targets = await r.json();
+  if (!r.ok) throw new Error(targets.error || `/api/targets: HTTP ${r.status}`);
+  document.getElementById("targets-list").innerHTML = targets.length
+    ? `<table>${targets.map(t => `<tr><td><div class="name">${esc(t.url)}</div>
+        <div class="target-key">${esc(t.key)}</div></td>
+        <td style="text-align:right"><button class="target-del" title="Remove this target" aria-label="Remove ${esc(t.key)}"
+          data-id="${esc(t.id)}" data-key="${esc(t.key)}">🗑</button></td></tr>`).join("")}</table>`
+    : '<p class="muted">No targets configured yet.</p>';
+}
+
+function targetsFailed(err) {
+  console.error("targets failed", err);
+  targetsStatus.className = "msg err"; targetsStatus.textContent = err.message;
+}
+
+targetUrl.addEventListener("input", () => { targetAdd.disabled = targetBusy || !targetUrl.value.trim(); });
+document.getElementById("target-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const url = targetUrl.value.trim();
+  if (!url || targetBusy) return;
+  targetBusy = true; targetUrl.disabled = true; targetAdd.disabled = true;
+  targetsStatus.className = "msg"; targetsStatus.innerHTML = '<span class="spinner"></span> Checking repository…';
+  try {
+    const r = await fetch("/api/targets", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({url}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `add target: HTTP ${r.status}`);
+    targetUrl.value = "";
+    targetsStatus.className = "msg ok"; targetsStatus.textContent = `Added ${data.target.key}`;
+    await loadTargets();
+  } catch (err) {
+    targetsFailed(err);
+  } finally {
+    targetBusy = false; targetUrl.disabled = false;
+    targetAdd.disabled = !targetUrl.value.trim(); targetUrl.focus();
+  }
+});
+
+document.addEventListener("click", async e => {
+  const button = e.target.closest(".target-del");
+  if (!button || targetBusy) return;
+  if (!confirm(`Remove target ${button.dataset.key}? Existing runs are kept.`)) return;
+  button.disabled = true;
+  try {
+    const r = await fetch("/api/targets/" + encodeURIComponent(button.dataset.id), {method: "DELETE"});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `remove target: HTTP ${r.status}`);
+    targetsStatus.className = "msg ok"; targetsStatus.textContent = `Removed ${button.dataset.key}`;
+    await loadTargets();
+  } catch (err) {
+    button.disabled = false;
+    targetsFailed(err);
+  }
+});
+
+fetch("/api/mode").then(r => r.ok ? r.json() : Promise.reject(new Error(`/api/mode: HTTP ${r.status}`)))
+  .then(mode => {
+    if (!mode.queued) return;
+    document.getElementById("targets").hidden = false;
+    return loadTargets();
+  }).catch(targetsFailed);
 
 load().catch(err => { console.error(err);
   document.getElementById("status").innerHTML = `<span class="err">${esc(err.message)}</span>`; });

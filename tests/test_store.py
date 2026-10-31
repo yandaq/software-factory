@@ -51,6 +51,23 @@ def test_run_round_trips_state_config_and_events(db, factory: Path, target: Path
     assert not (run.dir / "events.jsonl").exists() and not (run.dir / "run-state.json").exists()
 
 
+def test_snapshot_uses_submitter_working_tree_not_origin(tmp_path, factory: Path, target: Path):
+    """Uncommitted dashboard config edits reach the run even when origin's default branch differs."""
+    from conftest import sh
+
+    from sf.dashboard import set_agent_config
+
+    bare = tmp_path / "factory.git"
+    sh(tmp_path, "git", "clone", "-q", "--bare", str(factory), str(bare))
+    sh(factory, "git", "remote", "add", "origin", str(bare))
+    sh(factory, "git", "checkout", "-qb", "feature")
+    assert set_agent_config(factory / "agents", "planner", "halogen/local-model", "high") is None
+    config = store.snapshot_config(factory, target)
+    assert "model: halogen/local-model" in config["agents"]["planner.md"]
+    assert config["factory_sha"] == sh(factory, "git", "rev-parse", "HEAD").strip()
+    assert config["factory_remote"] == str(bare)
+
+
 def test_new_run_id_suffixes_a_taken_second(db, target: Path, monkeypatch: pytest.MonkeyPatch):
     class Fixed:
         @staticmethod

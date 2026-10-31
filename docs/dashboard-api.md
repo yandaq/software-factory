@@ -85,7 +85,7 @@ Records are identified by the triple `ts`, `run_id` and `title`; see
 
 ## Polling
 
-`/` re-fetches the run list and the selected run every 2 s. `/config` loads `/api/config` on demand and polls
+`/` re-fetches the run list (filtered by the selected target in DB mode) and the selected run every 2 s. `/config` loads `/api/config` on demand and polls
 `/api/improvements` every 1.5 s while an execution is running, retrying after 3 s when a poll fails. Mutation
 requests invalidate older in-flight polls so a late response cannot restore a deleted entry or a stale status.
 Python changes applied by an execution need a restart of any long-running `sf watch` or `sf dashboard` process;
@@ -101,6 +101,15 @@ prompt changes are picked up at the next agent invocation.
 | `GET` | `/api/runs/<id>/<artefact>` | Served from the `run_documents` table, same name rules. |
 | `POST` | `/api/runs/<id>/resume` | Re-enqueues the parked run's latest failed stage job: `{"error": null, "job": {...}}`. 404 unknown run; 409 when the run is not parked or is parked at the loop cap. Only routed in DB mode. |
 | `POST` | `/api/runs/<id>/retro` | Always 409: retro is not available for queued runs in v1. |
+| `GET` | `/api/runs?target=<key>` | Each summary also carries `target_key` (the normalised remote of the run's target, e.g. `github.com/owner/repo`; a local-path remote keys by its path). With `target`, only that key's runs. |
+| `POST` | `/api/runs` | Body `{"target": "<key>", "prompt"}`. Clones the target into the cache, reads its `.sf.toml` and trunk and queues a run with the configured URL as its remote: 201 `{"error": null, "run_id"}`. 400 blank prompt or target; 404 unknown target key; 502 clone failed; 422 invalid `.sf.toml` or trunk. No plan approval. |
 | `DELETE` | `/api/runs/<id>` | Deletes the run's rows; its artifact-store objects are kept. |
+| `GET` | `/api/mode` | `{"queued": true}` (also answered in file mode, with `false`). The pages use it to show targets and job entry. |
+| `GET` | `/api/targets` | Configured targets, oldest first: `[{"id", "url", "key", "created_at"}]`. |
+| `POST` | `/api/targets` | Body `{"url"}` — `owner/repo` (stored as `git@github.com:owner/repo.git`), an https or SSH URL. Checked with `git ls-remote`. 201 `{"error": null, "target": {...}}`; 400 missing URL or `cannot reach <url>: …`; 409 a target with the same key exists. |
+| `DELETE` | `/api/targets/<id>` | `{"error": null}`; 404 unknown id. Only the list entry is removed; its runs remain. |
 | `GET`/`DELETE` | `/api/improvements` | Read and delete rows of the `improvements` table. |
 | `POST` | `/api/improvements/apply` | Same responses; the worker thread clones the factory remote, applies, validates, commits and pushes under a per-remote advisory lock. See [improvements-log.md](improvements-log.md#queued-applications). |
+
+In file mode `/api/targets`, `/api/targets/<id>` and `POST /api/runs` answer 409
+`{"error": "Targets and job submission require SF_DATABASE_URL"}`.

@@ -3,6 +3,7 @@
 
 Script: {"<agent>": [step, ...]}; each call consumes the agent's next step (the last repeats).
 step: {"text": str, "write": {path: content}, "stop": str, "aborted": bool, "exit": int}
+`--list-models` prints $FAKE_PI_MODELS (default `fake/model`); exits $FAKE_PI_LIST_EXIT.
 Every call's argv, and the task message read from its trailing @file, is appended to
 $FAKE_PI_SCRIPT.calls.jsonl.
 """
@@ -14,6 +15,11 @@ import uuid
 from pathlib import Path
 
 argv = sys.argv[1:]
+if argv == ["--list-models"]:  # models from $FAKE_PI_MODELS (comma-separated), default fake/model
+    print("provider  model  context")
+    for m in os.environ.get("FAKE_PI_MODELS", "fake/model").split(","):
+        print(*m.split("/", 1), "1M") if m else None
+    sys.exit(int(os.environ.get("FAKE_PI_LIST_EXIT", "0")))
 agent = Path(argv[argv.index("--append-system-prompt") + 1]).stem
 script_path = Path(os.environ["FAKE_PI_SCRIPT"])
 script = json.loads(script_path.read_text())

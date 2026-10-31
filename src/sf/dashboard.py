@@ -44,11 +44,10 @@ from sf.apply import (
     start_queued_application,
 )
 from sf.improve import delete_decision, load_decisions
-from sf.models import list_native_models
-from sf.pi import pi_bin
+from sf.models import list_native_models, list_pi_models
 from sf.run import RunLock
-from sf.target import discover_documentation
-from sf.workflow import resume_queued
+from sf.target import TrunkError, discover_documentation
+from sf.workflow import resume_queued, submit_remote_run
 
 STATIC = Path(__file__).parent / "static"
 # Console output of a dashboard retro, written by the `sf improve` child process and served as an artefact.
@@ -271,9 +270,40 @@ class DbRuns:
     def _conn(self) -> Any:
         return store.connect(self.db_url)
 
-    def list_runs(self) -> list[dict[str, Any]]:
+    def list_runs(self, target: str | None = None) -> list[dict[str, Any]]:
+        """Run summaries, newest first, each with its `target_key`; only that target's runs when `target` is set."""
         with self._conn() as conn:
-            return [_summary(r["state"]) for r in conn.execute("SELECT state FROM runs ORDER BY created_at DESC, id DESC")]
+            rows = conn.execute("SELECT r.state, c.target_config->>'remote' AS remote FROM runs r"
+                                " LEFT JOIN run_config c ON c.run_id = r.id ORDER BY r.created_at DESC, r.id DESC")
+            runs = [_summary(r["state"]) | {"target_key": _target_key(r["remote"])} for r in rows]
+        return [r for r in runs if target is None or r["target_key"] == target]
+
+    def targets(self) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            return store.list_targets(conn)
+
+    def add_target(self, url: str) -> dict[str, Any]:
+        """Configure a target after `git ls-remote` reaches it; ValueError for a duplicate, GitError if unreachable."""
+        url = g.expand_target_url(url)
+        if not url:
+            raise ValueError("url must not be empty")
+        if g.target_key(url) is None:  # a local path (one machine, or tests): stored resolved, keyed by itself
+            url = str(Path(url).expanduser().resolve())
+        g.ls_remote(url)
+        with self._conn() as conn:
+            return store.add_target(conn, url, _target_key(url))
+
+    def delete_target(self, target_id: int) -> bool:
+        with self._conn() as conn:
+            return store.delete_target(conn, target_id)
+
+    def submit(self, target: str, prompt: str) -> str:
+        """Queue a run against the configured target with this key; LookupError when there is none."""
+        with self._conn() as conn:
+            row = store.get_target(conn, target)
+            if row is None:
+                raise LookupError(f"no configured target {target}")
+            return submit_remote_run(conn, self.factory, row["url"], prompt).run_id
 
     def run_detail(self, run_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
@@ -356,6 +386,11 @@ class DbRuns:
         return start_queued_application(self.db_url, self.factory, identity)
 
 
+def _target_key(remote: str | None) -> str | None:
+    """A run's or target's filter key: git.target_key of its remote URL, else (a local path) the path itself."""
+    return remote and (g.target_key(remote) or remote)
+
+
 def agent_config(agents_dir: Path) -> dict[str, Any]:
     agents = []
     for name in AGENT_NAMES:
@@ -363,7 +398,7 @@ def agent_config(agents_dir: Path) -> dict[str, Any]:
         agents.append({"name": name, "purpose": a.purpose, "harness": a.harness, "model": a.model,
                        "thinking": a.thinking})
     with ThreadPoolExecutor(max_workers=3) as pool:
-        pi_models = pool.submit(list_models)
+        pi_models = pool.submit(list_pi_models)
         native = {h: pool.submit(list_native_models, h) for h in ("claude-code", "codex")}
         models, error = pi_models.result()
         catalogs = {"pi": (models, error), **{h: f.result() for h, f in native.items()}}
@@ -372,16 +407,6 @@ def agent_config(agents_dir: Path) -> dict[str, Any]:
                  for id_, label in (("pi", "Pi"), ("claude-code", "Claude Code"), ("codex", "Codex"))]
     return {"agents": agents, "thinking_levels": list(get_args(Thinking)), "models": models,
             "models_error": error, "harnesses": harnesses}
-
-
-def list_models() -> tuple[list[str], str | None]:
-    """`provider/model` ids from `pi --list-models`, for the model picker's suggestions."""
-    try:
-        out = subprocess.run([pi_bin(), "--list-models"], capture_output=True, text=True, timeout=30, check=True)
-    except (OSError, subprocess.SubprocessError) as e:
-        return [], f"pi --list-models failed: {e}"
-    rows = [line.split() for line in out.stdout.splitlines()[1:]]
-    return [f"{r[0]}/{r[1]}" for r in rows if len(r) >= 2], None
 
 
 def set_agent_config(agents_dir: Path, name: str, model: str, thinking: str,
@@ -456,8 +481,15 @@ def make_handler(runs: FileRuns | DbRuns, agents_dir: Path) -> type[BaseHTTPRequ
                 return self.send_error(HTTPStatus.NOT_FOUND)
             if parts == ["api", "runners"]:  # file mode has no runners: null tells the page to hide the panel
                 return self._json(runs.runners() if runs.queued else {"runners": None, "queued": None})
+            if parts == ["api", "mode"]:
+                return self._json({"queued": runs.queued})
+            if parts == ["api", "targets"]:
+                return self._json(runs.targets()) if runs.queued else self._needs_db()
             if parts == ["api", "runs"]:
-                return self._json(runs.list_runs())
+                target = parse_qs(urlsplit(self.path).query).get("target", [None])[0]
+                if target is not None and not runs.queued:
+                    return self._needs_db()
+                return self._json(runs.list_runs(target) if target is not None else runs.list_runs())
             if len(parts) == 3 and parts[:2] == ["api", "runs"]:
                 return self._json(runs.run_detail(parts[2]))
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "document":
@@ -478,6 +510,10 @@ def make_handler(runs: FileRuns | DbRuns, agents_dir: Path) -> type[BaseHTTPRequ
             parts = [p for p in self.path.split("?")[0].split("/") if p]
             if parts == ["api", "improvements", "apply"]:
                 return self._apply_improvement()
+            if parts == ["api", "targets"]:
+                return self._add_target() if runs.queued else self._needs_db()
+            if parts == ["api", "runs"]:
+                return self._submit() if runs.queued else self._needs_db()
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "retro":
                 return self._start_retro(parts[2])
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "resume" and runs.queued:
@@ -488,6 +524,13 @@ def make_handler(runs: FileRuns | DbRuns, agents_dir: Path) -> type[BaseHTTPRequ
             parts = [p for p in self.path.split("?")[0].split("/") if p]
             if parts == ["api", "improvements"]:
                 return self._delete_improvement()
+            if len(parts) == 3 and parts[:2] == ["api", "targets"]:
+                if not runs.queued:
+                    return self._needs_db()
+                if parts[2].isdigit() and runs.delete_target(int(parts[2])):
+                    return self._json({"error": None})
+                return self._send(json.dumps({"error": "No such target"}).encode(), "application/json",
+                                  HTTPStatus.NOT_FOUND)
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "document":
                 return self._delete_project_document(parts[2])
             if len(parts) == 3 and parts[:2] == ["api", "runs"]:
@@ -520,6 +563,48 @@ def make_handler(runs: FileRuns | DbRuns, agents_dir: Path) -> type[BaseHTTPRequ
                 "application/json",
                 HTTPStatus.BAD_REQUEST if error else HTTPStatus.OK,
             )
+
+        def _needs_db(self) -> None:
+            self._send(json.dumps({"error": "Targets and job submission require SF_DATABASE_URL"}).encode(),
+                       "application/json", HTTPStatus.CONFLICT)
+
+        def _body(self, *keys: str) -> dict[str, Any]:
+            """The JSON object body, with each of `keys` a non-empty string; ValueError otherwise."""
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            if not isinstance(body, dict) or any(not isinstance(body.get(k), str) or not body[k].strip() for k in keys):
+                raise ValueError(f"{' and '.join(keys)} must be non-empty strings")
+            return body
+
+        def _add_target(self) -> None:
+            try:
+                body = self._body("url")
+            except ValueError as e:
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.BAD_REQUEST)
+            try:
+                target = runs.add_target(body["url"])
+            except ValueError as e:
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.CONFLICT)
+            except g.GitError as e:
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.BAD_REQUEST)
+            self._send(json.dumps({"error": None, "target": target}).encode(), "application/json", HTTPStatus.CREATED)
+
+        def _submit(self) -> None:
+            try:
+                body = self._body("target", "prompt")
+            except ValueError as e:
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.BAD_REQUEST)
+            try:
+                run_id = runs.submit(body["target"], body["prompt"])
+            except LookupError as e:
+                status, error = HTTPStatus.NOT_FOUND, str(e)
+            except g.GitError as e:  # the target could not be cloned
+                status, error = HTTPStatus.BAD_GATEWAY, str(e)
+            except (TrunkError, OSError, ValueError) as e:  # its .sf.toml or trunk is unusable
+                status, error = HTTPStatus.UNPROCESSABLE_ENTITY, str(e)
+            else:
+                return self._send(json.dumps({"error": None, "run_id": run_id}).encode(), "application/json",
+                                  HTTPStatus.CREATED)
+            self._send(json.dumps({"error": error}).encode(), "application/json", status)
 
         def _resume(self, run_id: str) -> None:
             try:

@@ -66,6 +66,17 @@ textarea { width: 100%; height: 55vh; resize: vertical; font: 13px/1.5 var(--mon
 .editor-actions .danger { color: var(--bad); margin-right: auto; }
 .editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .muted { color: var(--muted); }
+#job { padding: 10px 16px; border-bottom: 1px solid var(--line); }
+#job[hidden] { display: none; }
+#job select, #job-prompt { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 4px; width: 100%; }
+#job select { padding: 5px 6px; margin-bottom: 8px; }
+#job-prompt { height: 84px; font: 13px/1.45 system-ui, sans-serif; }
+#job-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; }
+#job-submit { background: var(--accent); color: #fff; border-color: var(--accent); padding: 4px 12px; }
+#job-msg { overflow-wrap: anywhere; }
+.spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
 a.art { color: var(--accent); cursor: pointer; margin-right: 12px; display: inline-block; font-family: var(--mono); font-size: 12px; }
 pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; background: var(--chip); padding: 12px; border-radius: 6px; max-height: 480px; overflow: auto; margin: 10px 0 0; }
 .err { color: var(--bad); }
@@ -85,7 +96,12 @@ pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; backgrou
 <body>
 <div id="loading" hidden role="status" aria-label="Loading run"><div class="spin"></div></div>
 <div class="layout">
-  <aside><h1>Software factory runs <a href="/config" style="float:right;font-weight:400;font-size:13px;color:var(--accent)">config</a></h1><div id="runners" hidden></div><div id="runs"></div></aside>
+  <aside><h1>Software factory runs <a href="/config" style="float:right;font-weight:400;font-size:13px;color:var(--accent)">config</a></h1><div id="job" hidden>
+    <select id="target" aria-label="Target repository"><option value="">All targets</option></select>
+    <textarea id="job-prompt" aria-label="Job prompt" placeholder="Describe a job for the selected target…" disabled></textarea>
+    <div id="job-actions"><button id="job-submit" disabled>Queue job</button>
+      <span id="job-msg" class="muted" role="status"></span></div>
+  </div><div id="runners" hidden></div><div id="runs"></div></aside>
   <main id="main"><p class="muted">Select a run.</p></main>
 </div>
 <dialog id="editor" aria-labelledby="editor-title">
@@ -152,7 +168,7 @@ async function resumeRun(button) {
 }
 
 async function refreshRuns() {
-  const runs = await getJSON("/api/runs");
+  const runs = await getJSON("/api/runs" + (target ? "?target=" + encodeURIComponent(target) : ""));
   if (!selected && runs.length) selected = runs[0].run_id;
   document.getElementById("runs").innerHTML = runs.map(r => `
     <div class="run ${r.run_id === selected ? "sel" : ""}" data-id="${esc(r.run_id)}">
@@ -475,6 +491,76 @@ document.addEventListener("click", e => {
   }
 });
 
+// Queued mode only: target selector and job box. They sit outside #runs so the 2s refresh never redraws them.
+// The selected target is remembered per browser; a stored key that is no longer configured falls back to All.
+const TARGET_KEY = "sf.target";
+const targetSelect = document.getElementById("target");
+const jobPrompt = document.getElementById("job-prompt");
+const jobSubmit = document.getElementById("job-submit");
+const jobMsg = document.getElementById("job-msg");
+let target = "";
+let submitting = false;
+
+function jobHint(text, cls = "muted") { jobMsg.className = cls; jobMsg.textContent = text; }
+
+function updateJobControls() {
+  jobPrompt.disabled = submitting || !target;
+  jobSubmit.disabled = submitting || !target || !jobPrompt.value.trim();
+  if (!target && !submitting) jobHint("Select a target to queue a job.");
+}
+
+async function initTargets() {
+  const mode = await getJSON("/api/mode");
+  if (!mode.queued) return;
+  const targets = await getJSON("/api/targets");
+  targetSelect.innerHTML = '<option value="">All targets</option>'
+    + targets.map(t => `<option value="${esc(t.key)}">${esc(t.key)}</option>`).join("");
+  let stored = "";
+  try { stored = localStorage.getItem(TARGET_KEY) || ""; } catch (err) { console.warn("localStorage unavailable", err); }
+  target = targets.some(t => t.key === stored) ? stored : "";
+  targetSelect.value = target;
+  document.getElementById("job").hidden = false;
+  if (!targets.length) jobHint("Add a target on the config page.");
+  updateJobControls();
+}
+
+targetSelect.addEventListener("change", () => {
+  target = targetSelect.value;
+  try { localStorage.setItem(TARGET_KEY, target); } catch (err) { console.warn("localStorage unavailable", err); }
+  jobHint("");
+  updateJobControls();
+  tick();
+});
+jobPrompt.addEventListener("input", updateJobControls);
+jobPrompt.addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void submitJob(); }
+});
+jobSubmit.addEventListener("click", () => void submitJob());
+
+async function submitJob() {
+  const prompt = jobPrompt.value.trim();
+  if (submitting || !target || !prompt) return;
+  submitting = true; updateJobControls();
+  jobMsg.className = "muted"; jobMsg.innerHTML = '<span class="spinner"></span> Queueing…';
+  try {
+    const r = await fetch("/api/runs", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({target, prompt}),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `queue job: HTTP ${r.status}`);
+    jobPrompt.value = "";
+    jobHint(`Queued ${data.run_id}`, "muted");
+    selected = data.run_id; openArtefact = null; documentMessage = ""; location.hash = selected;
+    if (selected !== rendered) loading(true);
+    tick();
+  } catch (err) {
+    console.error("queue job failed", err);
+    jobHint(err.message, "err");
+  } finally {
+    submitting = false; updateJobControls();
+  }
+}
+
 // Large runs can take longer than the refresh interval to load; overlapping ticks would render out of order.
 let ticking = false;
 async function tick() {
@@ -485,8 +571,10 @@ async function tick() {
     `<p class="err">Refresh failed: ${esc(err.message)}</p>`); }
   finally { ticking = false; }
 }
-tick();
-setInterval(tick, 2000);
+initTargets().catch(err => { console.error("targets failed", err); }).finally(() => {
+  tick();
+  setInterval(tick, 2000);
+});
 </script>
 </body>
 </html>

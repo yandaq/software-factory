@@ -100,7 +100,12 @@ def watch(
     folder: Annotated[Path, typer.Argument(help="Folder holding todo/, doing/ and done/")],
     approve_plan: Annotated[bool, typer.Option(help="Require human approval of the plan")] = False,
 ) -> None:
-    """Run every Markdown prompt dropped into FOLDER against TARGET, until Ctrl+C."""
+    """Run every Markdown prompt dropped into FOLDER against TARGET, until Ctrl+C.
+
+    With SF_DATABASE_URL set, each prompt is queued for `sf runner`s instead (moved to done/ once queued).
+    """
+    if approve_plan and os.environ.get("SF_DATABASE_URL"):
+        raise typer.BadParameter("--approve-plan is not supported for queued runs in v1; unset SF_DATABASE_URL")
     factory = _factory()
     if folder.exists() and not folder.is_dir():
         raise typer.BadParameter(f"{folder} is a file, not a folder")
@@ -131,16 +136,17 @@ def _watch_loop(
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Watch the queue until Ctrl+C. `sleep` is injectable so tests never wait."""
-    typer.echo(f"watching {box.root} (one run at a time; Ctrl+C to stop)")
+    if os.environ.get("SF_DATABASE_URL"):
+        typer.echo(f"watching {box.root} (queueing each prompt for sf runners; Ctrl+C to stop)")
+        execute, busy = partial(_queue_prompt, factory, target), lambda: None
+    else:
+        typer.echo(f"watching {box.root} (one run at a time; Ctrl+C to stop)")
+        execute = partial(_watch_prompt, factory, target, box, approve_plan=approve_plan)
+        busy = partial(_lock_busy, factory)
     typer.echo(f"  todo  {box.todo}")
     typer.echo(f"  doing {box.doing}")
     typer.echo(f"  done  {box.done}")
-    box.monitor(
-        partial(_watch_prompt, factory, target, box, approve_plan=approve_plan),
-        note=typer.echo,
-        busy=partial(_lock_busy, factory),
-        sleep=sleep,
-    )
+    box.monitor(execute, note=typer.echo, busy=busy, sleep=sleep)
     typer.echo(f"stopped watching {box.root}")
 
 
@@ -166,6 +172,14 @@ def _watch_prompt(factory: Path, target: Path, box: mailbox.Mailbox, path: Path,
             run.log("mailbox_failed", file=path.name, outcome=str(e), resume=f"sf resume {run.state.run_id}")
             raise
         run.log("mailbox_completed", file=path.name, done=str(box.done))
+
+
+def _queue_prompt(factory: Path, target: Path, path: Path) -> None:
+    """Queue one prompt file as a run (the distributed `sf watch`); the monitor then moves it to done/."""
+    with store.connect() as conn:
+        store.migrate(conn)
+        state = submit_run(conn, factory, target, path.read_text())
+    typer.echo(f"queued run {state.run_id} for {path.name}")
 
 
 @app.command()

@@ -110,11 +110,19 @@ uv run sf resume <run-id>                  # re-enqueue a parked queued run's fa
 uv run sf dashboard                        # with SF_DATABASE_URL set: runs, jobs, runners, artifacts from the store
 ```
 
+**Targets and job entry.** In DB mode the dashboard's `/config` page lists *targets* — repositories the
+factory works on — added as `owner/repo` (GitHub over SSH), an https URL or an SSH URL and checked with
+`git ls-remote`. The runs page then shows a target selector (remembered per browser; *All targets* by default)
+that filters the run list, and a **Queue job** box (Ctrl/Cmd+Enter) that submits a prompt against the selected
+target: the dashboard clones it, reads its `.sf.toml` and trunk, and queues the run. Removing a target keeps
+its runs. `sf watch` with `SF_DATABASE_URL` set queues each prompt instead of running it and moves the file to
+`done/` once queued (`--approve-plan` is refused).
+
 The target given to `sf submit` should have an `origin` remote that every runner can clone and push to (without
 one the checkout's own path is used, which only works when runners share that machine); every stage
 pushes `sf/<run-id>` there and the merge stage fast-forwards the trunk on it. The factory snapshot (agents and
-task templates) is taken from a fresh clone of the factory's own origin when it has one, so commit and push
-config changes before submitting runs that should use them. `--approve-plan`, retro and continuing past the
+task templates) is taken from the submitting checkout's working tree, uncommitted config-page edits included;
+improvements applied in DB mode are pushed to the factory origin, so pull them into that checkout to use them. `--approve-plan`, retro and continuing past the
 loop cap are not available for queued runs yet. Infra failures (clone/push/upload, a runner that disappears)
 are retried twice automatically; agent failures park the run, shown in the dashboard with a **resume** button.
 
@@ -122,7 +130,11 @@ Each runner machine needs:
 
 - this repository checked out with `uv sync` done, and the `SF_*` variables above;
 - the harness CLIs its agents use (`pi`, `claude`, `codex`), installed and authenticated — the runner advertises
-  `harness:<name>` for each one it finds on `PATH` or via `SF_PI`/`SF_CLAUDE`/`SF_CODEX`;
+  `harness:<name>` for each one it finds on `PATH` or via `SF_PI`/`SF_CLAUDE`/`SF_CODEX`, plus
+  `model:pi:<provider>/<model>` for each model `pi --list-models` shows (only providers Pi has auth for), and
+  Pi stage jobs require their agent's model cap. Caps are detected at startup: restart the runner after
+  logging in to a provider. A job no runner can claim stays queued; its `required_caps` are in its
+  `job_enqueued` event;
 - git credentials that can clone and push every target remote (and the factory remote, for improve jobs and
   for the dashboard host that applies improvements), plus a git identity (`user.name`, `user.email`);
 - network reach to evo-x2 (Postgres and port 3900) over Tailscale.

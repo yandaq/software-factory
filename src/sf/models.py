@@ -8,6 +8,8 @@ import tempfile
 import time
 from typing import Any
 
+from sf.pi import pi_bin
+
 
 class _CatalogProcess:
     """Bounded JSONL control exchange; stderr is retained for failure diagnostics."""
@@ -112,3 +114,13 @@ def list_native_models(harness: str, timeout: float = 30) -> tuple[list[str], st
             stderr.seek(0)
             detail = stderr.read().decode(errors="replace").strip()[-2000:]
             return [], f"{harness} model discovery failed: {e}" + (f"; {detail}" if detail else "")
+
+
+def list_pi_models() -> tuple[list[str], str | None]:
+    """`provider/model` ids from `pi --list-models` (only providers with configured auth are listed)."""
+    try:
+        out = subprocess.run([pi_bin(), "--list-models"], capture_output=True, text=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        return [], f"pi --list-models failed: {e}"
+    rows = [line.split() for line in out.stdout.splitlines()[1:]]
+    return [f"{r[0]}/{r[1]}" for r in rows if len(r) >= 2], None

@@ -13,15 +13,25 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from sf import artifacts, queue, store, workflow
+from sf import artifacts, models, queue, store, workflow
 from sf.run import now
 
 HARNESS_BINARIES = {"pi": "SF_PI", "claude": "SF_CLAUDE", "codex": "SF_CODEX"}
 
 
-def detect_caps() -> list[str]:
-    """`harness:<x>` for each harness CLI configured via SF_<X> or found on PATH."""
-    return [f"harness:{name}" for name, env in HARNESS_BINARIES.items() if os.environ.get(env) or shutil.which(name)]
+def detect_caps(log: Callable[..., None] | None = None) -> list[str]:
+    """`harness:<x>` for each harness CLI configured via SF_<X> or found on PATH, plus `model:pi:<provider/model>`
+    for each model `pi --list-models` reports (only providers this machine has auth for). Detected once:
+    restart the runner after logging in to a provider. A failed listing is logged and adds no model caps.
+    """
+    log = log or json_log
+    caps = [f"harness:{name}" for name, env in HARNESS_BINARIES.items() if os.environ.get(env) or shutil.which(name)]
+    if "harness:pi" in caps:
+        pi_models, error = models.list_pi_models()
+        if error:
+            log(event="pi_models_failed", error=error)
+        caps += [workflow.pi_model_cap(m) for m in pi_models]
+    return caps
 
 
 def missing_env() -> list[str]:

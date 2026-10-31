@@ -76,7 +76,7 @@ def wait_applied(db, title, timeout=20):
     pytest.fail(f"application of {title!r} did not finish")
 
 
-def test_apply_pushes_to_factory_remote_and_next_submit_snapshots_it(db, db_url, factory, factory_remote, target,
+def test_apply_pushes_to_factory_remote_and_reaches_runs_after_pull(db, db_url, factory, factory_remote, target,
                                                                     fake_pi, s3):
     template = "APPLIED {{request}} {{documentation}}\n"
     fake_pi({"implementer": [{"text": '{"summary":"Delivered"}', "write": {"agents/planner.user.md": template}}]})
@@ -93,8 +93,11 @@ def test_apply_pushes_to_factory_remote_and_next_submit_snapshots_it(db, db_url,
     client, bucket = s3
     keys = [o["Key"] for o in client.list_objects_v2(Bucket=bucket, Prefix=application["artifact_prefix"])["Contents"]]
     assert application["artifact_prefix"] + "prompt.md" in keys
-    state = submit_run(db, factory, target, "next run")
-    config = store.load_config(db, state.run_id)
+    # Runs snapshot the submitter's checkout, so the application reaches them once it is pulled.
+    assert store.load_config(db, submit_run(db, factory, target, "before pull").run_id)["agents"][
+        "planner.user.md"] != template
+    sh(factory, "git", "pull", "-q", "origin", "main")
+    config = store.load_config(db, submit_run(db, factory, target, "next run").run_id)
     assert config["agents"]["planner.user.md"] == template
     assert config["factory_sha"] == application["commit"] and config["factory_remote"] == str(factory_remote)
 

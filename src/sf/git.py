@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -67,6 +68,36 @@ def target_remote(target: Path) -> str:
     """Where runners fetch and push a target: its `origin` URL, else the checkout's own path (one machine)."""
     url = git(target, "remote", "get-url", "origin", check=False).strip()
     return url or str(target.resolve())
+
+
+def expand_target_url(url: str) -> str:
+    """A bare GitHub `owner/repo` becomes its SSH clone URL; anything else is returned stripped."""
+    url = url.strip()
+    if re.fullmatch(r"[\w.-]+/[\w.-]+", url) and not Path(url).exists():
+        return f"git@github.com:{url}.git"
+    return url
+
+
+def target_key(url: str) -> str | None:
+    """`host/owner/repo` for an SSH (`git@host:o/r`, `ssh://git@host/o/r`) or HTTPS URL, lowercase host,
+    without `.git` or a trailing slash, so different spellings of one repository compare equal.
+    None for anything else, such as a local path (one machine, or tests)."""
+    url = url.strip().rstrip("/")
+    m = (re.fullmatch(r"(?:ssh|https?|git)://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)", url)
+         or re.fullmatch(r"[^@/:]+@([^/:]+):(.+)", url))
+    if not m:
+        return None
+    path = m.group(2).rstrip("/").removesuffix(".git").strip("/")
+    return f"{m.group(1).lower()}/{path}" if path else None
+
+
+def ls_remote(url: str) -> None:
+    """Check `url` is a reachable git repository (never prompting for credentials); GitError says why not."""
+    proc = subprocess.run(["git", "ls-remote", "--quiet", url, "HEAD"], capture_output=True, text=True,
+                          check=False, env={"GIT_SSH_COMMAND": "ssh -o BatchMode=yes"} | os.environ
+                          | {"GIT_TERMINAL_PROMPT": "0"})
+    if proc.returncode != 0:
+        raise GitError(f"cannot reach {url}: {proc.stderr.strip() or f'git ls-remote exited {proc.returncode}'}")
 
 
 def cache_dir() -> Path:

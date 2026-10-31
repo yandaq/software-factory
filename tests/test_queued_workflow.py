@@ -12,7 +12,7 @@ from sf import queue, store
 from sf.run import RunState
 from sf.workflow import StageResult, complete_stage, run_job, start_run
 
-ALL_CAPS = ["harness:pi", "harness:claude", "harness:codex"]
+ALL_CAPS = ["harness:pi", "harness:claude", "harness:codex", "model:pi:fake/model"]
 
 
 def create(db, factory, target, **over) -> RunState:
@@ -40,7 +40,7 @@ def test_complete_stage_enqueues_next_job_with_harness_caps(db, factory, target,
     assert [(j["stage"], j["required_caps"]) for j in jobs(db, state.run_id)] == [("branch", [])]
     complete_stage(db, claim(db), state, StageResult("ok", "on branch"))
     complete_stage(db, claim(db), state, StageResult("ok", "prompt saved"))
-    assert jobs(db, state.run_id)[-1]["required_caps"] == ["harness:pi"]  # planner
+    assert jobs(db, state.run_id)[-1]["required_caps"] == ["harness:pi", "model:pi:fake/model"]  # planner
     complete_stage(db, claim(db), state, StageResult("ok", "plan written"))
     last = jobs(db, state.run_id)[-1]
     assert (last["stage"], last["inputs"], last["required_caps"]) == (
