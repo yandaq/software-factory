@@ -5,3 +5,4 @@ __pycache__/
 runs/
 workflow/
 .DS_Store
+.env

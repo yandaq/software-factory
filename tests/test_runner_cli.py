@@ -1,5 +1,6 @@
 """`sf submit`, `sf runner` (worker.serve) and queued `sf resume`."""
 
+import os
 import threading
 import time
 
@@ -191,3 +192,14 @@ def test_resume_rejects_a_running_queued_run(env, factory, target):
     result = invoke("resume", state.run_id)
     assert result.exit_code == 1 and "not parked" in result.output
     assert len(jobs(env, state.run_id)) == 1
+
+
+def test_dotenv_fills_unset_variables_without_overriding(monkeypatch, factory):
+    monkeypatch.chdir(factory)
+    (factory / ".env").write_text("# comment\nexport SF_TEST_A='from-file'\nSF_TEST_B=from-file\n")
+    monkeypatch.delenv("SF_TEST_A", raising=False)
+    monkeypatch.setenv("SF_TEST_B", "from-shell")
+    invoke("submit", "--help")
+    assert os.environ["SF_TEST_A"] == "from-file"
+    assert os.environ["SF_TEST_B"] == "from-shell"
+    monkeypatch.delenv("SF_TEST_A")

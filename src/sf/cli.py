@@ -25,6 +25,20 @@ from sf.workflow import Aborted, Workflow, new_run, resume_queued, submit_run
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
+@app.callback()
+def _load_dotenv() -> None:
+    """Read `KEY=VALUE` lines from `./.env` (git-ignored) without overriding variables already set."""
+    path = Path.cwd() / ".env"
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.removeprefix("export ").split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
 def _factory() -> Path:
     root = Path.cwd()
     if not (root / "agents").is_dir():
