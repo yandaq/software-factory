@@ -13,8 +13,11 @@ uv run sf run --target ../my-app --approve-plan "..."        # human approves pl
 uv run sf watch --target ../my-app ./prompts                    # run every .md dropped into ./prompts/todo
 uv run sf resume <run-id>                                    # continue after a failure
 uv run sf improve <run-id>                                   # re-enter the improve phase
-uv run sf dashboard [--port 8765]                            # web dashboard at http://127.0.0.1:8765
+uv run sf dashboard [--host 127.0.0.1] [--port 8765]            # web dashboard at http://127.0.0.1:8765
 ```
+
+A run needs a clean target working tree: `sf run` fails the branch stage, before writing anything, when the
+target has uncommitted changes.
 
 `sf watch` turns a folder into a prompt queue. It creates `todo/`, `doing/` and `done/` inside the folder
 it is given and then monitors `todo/` until you press Ctrl+C (exit 0). Each Markdown file you drop into
@@ -83,6 +86,50 @@ from the dashboard; Claude Code and Codex keep resumable sessions in their own n
 
 Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, loop cap abort, merge conflict).
 
+## Distributed mode
+
+Runs can instead be queued in Postgres and executed stage by stage by any number of `sf runner` processes
+on the LAN/Tailscale. Production uses Postgres and a Garage S3 store (bucket `sf-artifacts`) on evo-x2.
+Full contract: [docs/spec.md §9](docs/spec.md).
+
+Set these in each shell that submits, runs jobs or serves the dashboard (values come from the evo-x2
+setup; never commit them):
+
+```sh
+export SF_DATABASE_URL=postgresql://<user>:<password>@evo-x2:5432/<db>
+export SF_S3_ENDPOINT=http://evo-x2:3900 SF_S3_REGION=garage SF_S3_BUCKET=sf-artifacts
+export SF_S3_ACCESS_KEY=<key id> SF_S3_SECRET_KEY=<secret>
+export SF_CACHE_DIR=~/.cache/sf     # optional: clone cache (this is the default)
+```
+
+```sh
+uv run sf submit ../my-app req.md          # queue a run (prompt from a file, or stdin with -); prints the run id
+uv run sf runner --concurrency 2           # claim and run stage jobs until Ctrl+C / SIGTERM
+uv run sf runner --caps toolchain:python --id build-box-1   # extra capability tags, stable runner id
+uv run sf resume <run-id>                  # re-enqueue a parked queued run's failed stage
+uv run sf dashboard                        # with SF_DATABASE_URL set: runs, jobs, runners, artifacts from the store
+```
+
+The target given to `sf submit` should have an `origin` remote that every runner can clone and push to (without
+one the checkout's own path is used, which only works when runners share that machine); every stage
+pushes `sf/<run-id>` there and the merge stage fast-forwards the trunk on it. The factory snapshot (agents and
+task templates) is taken from a fresh clone of the factory's own origin when it has one, so commit and push
+config changes before submitting runs that should use them. `--approve-plan`, retro and continuing past the
+loop cap are not available for queued runs yet. Infra failures (clone/push/upload, a runner that disappears)
+are retried twice automatically; agent failures park the run, shown in the dashboard with a **resume** button.
+
+Each runner machine needs:
+
+- this repository checked out with `uv sync` done, and the `SF_*` variables above;
+- the harness CLIs its agents use (`pi`, `claude`, `codex`), installed and authenticated — the runner advertises
+  `harness:<name>` for each one it finds on `PATH` or via `SF_PI`/`SF_CLAUDE`/`SF_CODEX`;
+- git credentials that can clone and push every target remote (and the factory remote, for improve jobs and
+  for the dashboard host that applies improvements), plus a git identity (`user.name`, `user.email`);
+- network reach to evo-x2 (Postgres and port 3900) over Tailscale.
+
+Runner output is one JSON object per line. A runner stopped with Ctrl+C finishes its running jobs first; a
+second Ctrl+C exits at once and the jobs are requeued when their leases expire.
+
 ## Layout
 
 | Path | Purpose |
@@ -90,8 +137,10 @@ Exit codes: `0` done, `1` stage failed (resumable), `2` aborted (plan rejected, 
 | `agents/<name>.user.md` | Editable task templates with fixed context placeholders; see [agents/README.md](agents/README.md) |
 | `agents/<name>.md` | Agent definitions: YAML frontmatter (harness, model, thinking, tools, JSON Schema contract) + role prompt |
 | `templates/` | Starter `docs/coding-standards.md`, `docs/architecture.md` and `.gitignore` for targets that lack them (`AGENTS.md` and `docs/VALIDATION.md` are downloaded from [agents-default](https://github.com/yandaq/agents-default)) |
-| `runs/<run-id>/` | `events.jsonl`, `run-state.json`, `sessions/`, `<harness>-<stage>-<n>.stderr` / `.jsonl`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`, `retro.log` |
-| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes, and delete any one entry from that list. Play invokes the configured implementer against software-factory and commits all changes after success. Suggestions retain applied/failed status and execution diagnostics; failures can be retried. |
+| `runs/<run-id>/` | One directory per run, git-ignored: `events.jsonl`, `run-state.json`, each invocation's verbatim native stdout `<harness>-<stage>-<n>.jsonl` and `.stderr`, `prompts/`, `sessions/`, `prompt.md`, `plan.md`, `review-<n>.md`, `validation-<n>.log`, `retro.log`. Full contract: [docs/spec.md §7](docs/spec.md) |
+| `improvements.jsonl` | Improvement suggestions and historical decisions; previously rejected titles remain excluded. View newest-first history below the agent widget on `/config`, including rationale, evidence and proposed changes, and delete any one entry from that list. Play invokes the configured implementer against software-factory and commits all changes after success. Suggestions retain applied/failed status and execution diagnostics; failures can be retried. Record format: [docs/improvements-log.md](docs/improvements-log.md) |
+| `docs/dashboard-api.md` | The dashboard's HTTP API: routes, payloads and status codes |
+| `docs/improvements-log.md` | The `improvements.jsonl` record, its identity and its application metadata |
 | `src/sf/` | Orchestrator (see [ARCHITECTURE.md](ARCHITECTURE.md)) |
 
 ## Target configuration

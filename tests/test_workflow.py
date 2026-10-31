@@ -158,9 +158,14 @@ def test_successful_validation_evidence_reaches_reviewer(factory, target, fake_p
 def test_reviewer_validation_diagnostics_are_bounded(factory, target, fake_pi):
     command = "printf START; printf '%20000s' x; printf END"
     s = fake_pi(script())
+    (target / ".sf.toml").write_text("validation = " + json.dumps([command]) + "\n")
+    sh(target, "git", "add", "-A")
+    sh(target, "git", "commit", "-qm", "cfg")
     run, wf = start(factory, target)
+    wf.run_stage("branch", {})
     (run.dir / "plan.md").write_text("Plan")
-    wf._loop(1, [command])
+    result = wf.run_stage("implement", {"loop": 1, "feedback": ""})
+    wf.run_stage("review", {"loop": 1, **result.data})
     message = next(c for c in calls(s) if c["agent"] == "reviewer")["message"]
     assert command in message
     assert "diagnostic output truncated; last 12000 characters" in message
@@ -217,15 +222,15 @@ def test_documenter_scope_enforced(factory, target, fake_pi):
     assert any(e.get("type") == "git_revert" and e["repo"] == "target" for e in events)
 
 
-def test_merge_conflict_aborts(factory, target, fake_pi):
-    fake_pi(script())
-    _run, wf = start(factory, target)
+def test_merge_conflict_loops_back_once_then_aborts(factory, target, fake_pi):
+    s = fake_pi(script())
+    run, wf = start(factory, target)
     real_document = wf.stage_document
 
-    def document_then_conflict():
-        result = real_document()
+    def document_then_conflict(inputs):
+        result = real_document(inputs)
         sh(target, "git", "checkout", "-q", "main")
-        (target / "app.py").write_text("conflict\n")
+        (target / "app.py").write_text(f"conflict {len(calls(s))}\n")
         sh(target, "git", "add", "-A")
         sh(target, "git", "commit", "-qm", "c")
         return result
@@ -234,6 +239,9 @@ def test_merge_conflict_aborts(factory, target, fake_pi):
     with pytest.raises(Aborted, match="merge conflict"):
         wf.execute()
     assert not sh(target, "git", "status", "--porcelain")
+    implementers = [c for c in calls(s) if c["agent"] == "implementer"]
+    assert len(implementers) == 2 and "# Merge conflict" in implementers[1]["message"]
+    assert run.state.status == "aborted" and run.state.merge_conflicts == 2
 
 
 def test_resume_continues_from_failed_stage(factory, target, fake_pi):
@@ -300,8 +308,7 @@ def test_recorded_improvements_need_no_human_interface(factory, target, fake_pi)
     s = fake_pi(script(improver=[{"text": json.dumps({"ideas": ideas})}]))
     run, wf = start(factory, target)
     wf.human = object()  # Improve must not require any human callbacks.
-    wf._stage("improve")
-    assert run.state.results["improve"] == "2 improvements recorded"
+    assert wf._stage("improve").summary == "2 improvements recorded"
     history = load_decisions(factory)
     assert history[0] == previous
     assert [(d["title"], d["decision"]) for d in history[1:]] == [
@@ -369,17 +376,16 @@ def test_missing_task_template_fails_visibly(factory, target, fake_pi):
     assert '"type": "prompt_invalid"' in (run.dir / "events.jsonl").read_text()
 
 
-def test_validation_feedback_precedes_review_feedback(factory, target, fake_pi):
+def test_implementer_receives_its_inputs_feedback(factory, target, fake_pi):
+    """Feedback now arrives as job inputs chosen by `advance()` (validation failure or review findings)."""
     s = fake_pi(script())
     run, wf = start(factory, target)
+    wf.run_stage("branch", {})
     (run.dir / "plan.md").write_text("Plan context")
-    (run.dir / "review-1.md").write_text("Review context")
-    (run.dir / "validation-1.log").write_text("Validation {{literal}} context")
-    run.state.results["validation-1"] = "failed"
-    wf._loop(2, [])
+    wf.run_stage("implement", {"loop": 2, "feedback": "Validation {{literal}} context"})
     message = calls(s)[0]["message"]
     assert "Plan context" in message and "Validation {{literal}} context" in message
-    assert "Review context" not in message
+    assert run.state.loop == 2
 
 
 def test_documenter_updates_guidance_to_match_code(factory, target, fake_pi):

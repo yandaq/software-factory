@@ -7,7 +7,9 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "boto3>=1.43.123",
     "jsonschema>=4.26.0",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.0",
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
@@ -23,6 +25,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "moto[server]>=5.2.5",
     "pytest>=9.1.1",
     "ruff>=0.17.0",
 ]

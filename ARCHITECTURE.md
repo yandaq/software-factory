@@ -4,19 +4,39 @@
 |---|---|
 | `cli.py` | Typer commands; lockfile; watch wiring (per-run `RunLock`, `mailbox_*` events, up-front target check); maps outcomes to exit codes |
 | `mailbox.py` | Watch-folder queue only: `todo/`/`doing/`/`done/` layout, oldest-first candidates, settle guard, collision-safe claim/complete and the monitor loop; the caller supplies the per-file executor and the busy reason, poll and settle intervals default to module constants |
-| `workflow.py` | Stage driver, run-id allocation (`YYYYMMDD-HHMMSS`, `-N` suffixed when `runs/<id>` exists), per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge |
-| `improve.py` | Improve phase: read-only improver suggestions, decision history and application metadata in `improvements.jsonl`; serialized access and atomic rewrites |
-| `apply.py` | Explicit background implementation of a selected suggestion in the factory working tree; factory run lock, durable result and interruption recovery |
+| `workflow.py` | Stage driver, run-id allocation (`YYYYMMDD-HHMMSS`, `-N` suffixed when `runs/<id>` exists), per-stage checkpoints (`runs/<id>/run-state.json`; `runs/` is git-ignored), stages branch → merge. The stage graph is the pure `advance(state, stage, result)`, shared by the local driver and the queued path (`submit_run`, `run_job`, `complete_stage`, `resume_queued`), which records a job's result, saves state and enqueues the next job or parks the run in one transaction |
+| `improve.py` | Improve phase: read-only improver suggestions, decision history and application metadata in `improvements.jsonl`; serialized access and atomic rewrites. Record format: [docs/improvements-log.md](docs/improvements-log.md). Queued runs run improve as a stage job whose inputs are the run's evidence (`evidence/`) and a fresh factory clone (`factory/`); suggestions go to the `improvements` table |
+| `apply.py` | Explicit background implementation of a selected suggestion in the factory working tree; factory run lock, durable result and interruption recovery. In DB mode (`start_queued_application`) the dashboard thread clones the factory remote, implements, validates, commits and pushes under a Postgres advisory lock per factory remote, and records the outcome in the `improvements` table; its run directory is uploaded under `improvements/<execution id>/` |
 | `runner.py` | Shared invocation lifecycle, streamed subprocess boundary, JSON contract validation + re-prompts |
 | `pi.py`, `claude.py`, `codex.py` | Native CLI invocation, session handling, success detection and event/usage normalization; `pi.py` retains original runner imports for compatibility |
+| `models.py` | Read-only model-catalog discovery for the config page (`pi --list-models`, Claude Code control `initialize`, Codex app-server `model/list`): a bounded JSONL exchange that returns a catalog or a diagnostic and never starts an inference turn |
 | `run.py` | `RunState` (Pydantic), `events.jsonl` emitter, token aggregation, `RunLock` |
 | `agents.py` | Agent definitions plus fixed-vocabulary task-template validation and literal rendering |
 | `target.py` | `.sf.toml`, starter standards and starter `.gitignore`, generated-file environment, Git-based Markdown discovery, validation commands |
-| `git.py` | git wrapper |
-| `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/`; settings controls edit frontmatter; Markdown editor edits role definitions and task templates; a run's retro starts the improve phase again in a child process; config play starts an improvement execution |
+| `git.py` | git wrapper; for queued jobs also the per-remote clone cache (`SF_CACHE_DIR`, default `~/.cache/sf`), fresh per-job clones with `git clone --reference`, `sf/<run-id>` push/fetch and `InfraError` for remote failures |
+| `store.py` | Postgres store (`SF_DATABASE_URL`): ordered schema migrations; runs, `run_config` snapshot (agents, templates, target config incl. remote, factory remote), events, `run_documents` (prompt, plan, reviews), stage results and the `improvements` table |
+| `queue.py` | Stage-job queue: runner registration/heartbeat, `FOR UPDATE SKIP LOCKED` claim filtered by capability tags, leases, `LISTEN/NOTIFY` wake-ups, expired-lease reaping and infra retry (≤2, then fail and park) |
+| `worker.py` | `sf runner`: capability auto-detection, worker threads (one connection each), lease heartbeat thread, graceful shutdown, JSON log lines on stdout |
+| `artifacts.py` | S3-compatible artifact store (`SF_S3_*`; production Garage): upload/list/download a job's output directory under `runs/<run>/<stage>/<job-id>/`, presigned URLs for the dashboard |
+| `dashboard.py` + `static/dashboard.html`, `static/config.html` | Stdlib HTTP server and polling page over `runs/*/`; routes: [docs/dashboard-api.md](docs/dashboard-api.md); settings controls edit frontmatter; Markdown editor edits role definitions and task templates; a run's retro starts the improve phase again in a child process; config play starts an improvement execution. With `SF_DATABASE_URL` set it reads runs, jobs, runners and improvements from Postgres (`DbRuns`), links artifacts by presigned URL and can resume parked runs |
 | `console.py` | Rich live display and terminal prompts (`TerminalHuman`) |
 
 `Workflow` depends on a `Human` and a display protocol, so tests substitute scripted fakes.
+
+## Harness adapter contract
+
+The three adapter rows above are interchangeable. Each exposes `invoke(run, agent, inv, message, cwd, session,
+display)`, where `message` is the rendered task plus the contract instruction and `session` is the ID to resume
+or None for a fresh invocation, and returns a result carrying `session_id`, `final_text`, `returncode`,
+`completed`, `error`, a `failure` property and a `track(event)` that turns one native event into zero or more
+normalized `tool_execution_start` / `tool_execution_end` / `message_end` / `agent_settled` events. `runner._invoke`
+is the only place that selects an adapter.
+
+Adding a harness means adding a module of that shape, registering it in the dict in `runner._invoke`, adding its id
+to `Harness` and its effort levels to `THINKING_LEVELS`, and recording only the usage fields the CLI actually
+reports. Streaming, verbatim native capture, contract validation, correction retries, invocation records and the
+unavailable-metric rules stay in the shared runner; an adapter that grows workflow knowledge has been drawn in the
+wrong place.
 
 ## Compromises
 
@@ -54,8 +74,36 @@
 - **Session storage stays native.** Pi sessions live under the run; Claude Code and Codex persist sessions
   in their own user storage. A new invocation starts fresh; contract corrections resume its session with
   pinned settings. Native model support is checked by the CLI, not inferred from Pi's model catalogue.
+- **The task travels as a file, never as argv.** Pi is given `-- @<file>` and Claude Code and Codex read the task
+  on stdin, with the rendered task written under `runs/<id>/prompts/`. Pi receives its role prompt as an
+  `--append-system-prompt` file for the same reason and to keep long prompts out of the process arguments. A Pi
+  agent that runs `pkill -f <pattern>` would otherwise match, and kill, its own `pi` process whenever the task text
+  contained the pattern. The trade-off is one extra file per invocation, inside the run directory that is already
+  git-ignored.
 - **Resume granularity is a stage, or a loop inside implement.** An interrupted loop counts as used
   and the next loop starts fresh; an interrupted stage is re-run from its start.
+- **evo-x2 is a single point of failure.** Postgres and the Garage artifact store (v2.1.0 on evo-x2:3900,
+  bucket `sf-artifacts`) both run there; when it is down no queued run can progress. Accepted for now.
+  Garage replaced MinIO because the community MinIO images were withdrawn. Garage's ports are bound on all
+  interfaces, so reach must be limited by the network (Tailscale/LAN) rather than the bind address.
+- **Big-bang rollout.** The distributed path replaced queued execution in one step; the mitigation is the
+  fake-harness end-to-end tests of the full queued path, not staged production validation.
+- **Default runner id is `<host>-<pid>`.** A restarted runner registers as a new row; old rows go stale
+  (no heartbeat) rather than being reused. Pass `--id` for a stable identity.
+- **Job clones borrow cache objects.** `git clone --reference` keeps per-job clones cheap but makes them depend
+  on the clone cache's objects; a `git gc` of the cache while a job runs could break that clone.
+- **Apply runs in the dashboard host.** In DB mode an improvement application runs in a dashboard thread, so
+  that host needs the harness CLIs and push credentials for the factory remote. A non-fast-forward push fails
+  the application (retryable) rather than rebasing it.
+- **Config edits reach queued runs only once pushed.** The config page edits the dashboard's local checkout,
+  while new queued runs snapshot agents/templates from a fresh clone of the factory origin when it has one;
+  local edits apply to queued runs only after they are committed and pushed. Improve jobs review the run's
+  snapshotted agents alongside the latest factory source. When a run has no recorded factory remote
+  (`factory_remote` NULL) the local factory path is used instead.
+- **Artifacts outlive their run.** Deleting a queued run removes its database rows, not its objects in the
+  artifact store.
+- **v1 deferrals for queued runs.** Plan approval, retro and resuming a run parked at the loop cap are not
+  supported; `sf submit --approve-plan` and the retro route refuse them explicitly.
 - **Agents return documents inside their JSON contract** (e.g. `{"plan": ...}`) and the orchestrator
   writes `plan.md` / `review-<n>.md`, so read-only agents need no write tools.
 

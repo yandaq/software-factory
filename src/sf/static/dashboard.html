@@ -85,7 +85,7 @@ pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; backgrou
 <body>
 <div id="loading" hidden role="status" aria-label="Loading run"><div class="spin"></div></div>
 <div class="layout">
-  <aside><h1>Software factory runs <a href="/config" style="float:right;font-weight:400;font-size:13px;color:var(--accent)">config</a></h1><div id="runs"></div></aside>
+  <aside><h1>Software factory runs <a href="/config" style="float:right;font-weight:400;font-size:13px;color:var(--accent)">config</a></h1><div id="runners" hidden></div><div id="runs"></div></aside>
   <main id="main"><p class="muted">Select a run.</p></main>
 </div>
 <dialog id="editor" aria-labelledby="editor-title">
@@ -125,6 +125,30 @@ async function getJSON(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
   return r.json();
+}
+
+// Queued mode only (runners is null over runs/ files): runners with heartbeat age, and queue depth.
+let queuedMode = true;
+async function refreshRunners() {
+  if (!queuedMode) return;
+  const {runners, queued} = await getJSON("/api/runners");
+  if (runners === null) { queuedMode = false; return; }
+  const box = document.getElementById("runners");
+  box.hidden = false;
+  box.innerHTML = `<div class="meta" style="padding:8px 16px"><b>Runners</b> · ${queued} queued job${queued === 1 ? "" : "s"}
+    ${runners.map(x => `<div class="${x.stale ? "err" : ""}" title="${esc(x.caps.join(", "))}">${esc(x.id)} (${esc(x.host)})
+      · ${x.held}/${x.concurrency} · ${x.heartbeat_age == null ? "never" : Math.round(x.heartbeat_age) + "s ago"}${x.stale ? " · stale" : ""}</div>`).join("")
+      || '<div class="muted">No runners registered.</div>'}</div>`;
+}
+
+async function resumeRun(button) {
+  button.disabled = true;
+  try {
+    const r = await fetch(`/api/runs/${encodeURIComponent(selected)}/resume`, {method: "POST"});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `resume: HTTP ${r.status}`);
+    tick();
+  } catch (err) { console.error(err); alert(err.message); button.disabled = false; }
 }
 
 async function refreshRuns() {
@@ -273,7 +297,8 @@ async function refreshDetail() {
     <section>
       <h2>Run ${esc(s.run_id)}</h2>
       <p><span class="status s-${esc(s.status)}">${esc(s.status)}</span> · stage <b>${esc(s.stage)}</b>
-        · loop ${s.loop}/${s.max_loops}${s.cap_reached ? ' · <span class="err">loop cap reached</span>' : ""}</p>
+        · loop ${s.loop}/${s.max_loops}${s.cap_reached ? ' · <span class="err">loop cap reached</span>' : ""}
+        ${d.can_resume ? ' <button id="resume">resume</button>' : ""}</p>
       <p class="muted">${esc(s.target)} · ${esc(s.branch)} → ${esc(s.trunk)}</p>
       <div class="stages">${stages}</div>
     </section>
@@ -294,7 +319,9 @@ async function refreshDetail() {
       <tr><th>Scope</th><th class="n">Input</th><th class="n">Output</th><th class="n">Cache read</th>
       <th class="n">Cache write</th><th class="n">Cost</th></tr>${tokenRows(s.tokens || {})}</table></div></section>
     <section><h2>Artefacts</h2>${d.artefacts.map(a => `<a class="art" data-name="${esc(a)}">${esc(a)}</a>`).join("")}
-      <pre id="art" ${openArtefact ? "" : "hidden"}></pre></section>
+      <pre id="art" ${openArtefact ? "" : "hidden"}></pre>
+      ${d.artifacts_error ? `<p class="err">${esc(d.artifacts_error)}</p>` : ""}
+      ${(d.artifacts || []).map(a => `<div><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.stage)}#${a.job_id} ${esc(a.name)}</a></div>`).join("")}</section>
     <div class="grid">
       <section><h2>Orchestrator events</h2><div class="log" id="ev">${d.events.slice().reverse().map(eventLine).join("")}</div></section>
       <section><h2>Tool calls</h2><div class="log">${d.tools.slice().reverse().map(toolLine).join("")}</div></section>
@@ -431,6 +458,7 @@ document.addEventListener("click", e => {
   const del = e.target.closest(".del");
   if (del) return void deleteRun(del.closest(".run").dataset.id).catch(err => {
     console.error(err); alert(err.message); });
+  if (e.target.id === "resume") return void resumeRun(e.target);
   const retro = e.target.closest(".retro");
   if (retro) return void startRetro(retro);
   const doc = e.target.closest(".document");
@@ -452,7 +480,7 @@ let ticking = false;
 async function tick() {
   if (ticking) return;
   ticking = true;
-  try { await refreshRuns(); await refreshDetail(); }
+  try { await refreshRunners(); await refreshRuns(); await refreshDetail(); }
   catch (err) { console.error(err); loading(false); document.getElementById("main").insertAdjacentHTML("afterbegin",
     `<p class="err">Refresh failed: ${esc(err.message)}</p>`); }
   finally { ticking = false; }

@@ -7,20 +7,24 @@ action starts the read-only improve phase again in a child process.
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, get_args
 from urllib.parse import parse_qs, urlsplit
 
+import psycopg
 import yaml
 from jsonschema.exceptions import SchemaError
 
+from sf import artifacts, queue, store
 from sf import git as g
 from sf.agents import (
     AGENT_NAMES,
@@ -32,12 +36,19 @@ from sf.agents import (
     parse_agent,
     validate_task_template,
 )
-from sf.apply import ApplyRefused, recover_applications, start_application
+from sf.apply import (
+    ApplyRefused,
+    recover_applications,
+    recover_queued_applications,
+    start_application,
+    start_queued_application,
+)
 from sf.improve import delete_decision, load_decisions
 from sf.models import list_native_models
 from sf.pi import pi_bin
 from sf.run import RunLock
 from sf.target import discover_documentation
+from sf.workflow import resume_queued
 
 STATIC = Path(__file__).parent / "static"
 # Console output of a dashboard retro, written by the `sf improve` child process and served as an artefact.
@@ -49,6 +60,18 @@ EVENT_TAIL = 200
 TIMELINE_SKIP = {"message_update"}
 
 
+def _summary(s: dict[str, Any]) -> dict[str, Any]:
+    usage = s.get("tokens", {}).get("run", {})
+    unavailable = "cost" in usage.get("unavailable", [])
+    known = "cost" in usage.get("known", ["cost"])
+    return (
+        {k: s.get(k) for k in ("run_id", "status", "stage", "loop", "target", "cap_reached")}
+        | {"can_retro": "merge" in s.get("completed", []),
+           "cost": usage.get("cost", 0) if not unavailable or known else None,
+           "cost_partial": unavailable and known, "cost_estimated": usage.get("estimated", False)}
+    )
+
+
 def list_runs(runs_dir: Path) -> list[dict[str, Any]]:
     runs = []
     for state_file in sorted(runs_dir.glob("*/run-state.json"), reverse=True):
@@ -58,16 +81,28 @@ def list_runs(runs_dir: Path) -> list[dict[str, Any]]:
             runs.append({"run_id": state_file.parent.name, "status": "unreadable", "can_retro": False,
                          "error": str(e)})
             continue
-        usage = s.get("tokens", {}).get("run", {})
-        unavailable = "cost" in usage.get("unavailable", [])
-        known = "cost" in usage.get("known", ["cost"])
-        runs.append(
-            {k: s.get(k) for k in ("run_id", "status", "stage", "loop", "target", "cap_reached")}
-            | {"can_retro": "merge" in s.get("completed", []),
-               "cost": usage.get("cost", 0) if not unavailable or known else None,
-               "cost_partial": unavailable and known, "cost_estimated": usage.get("estimated", False)}
-        )
+        runs.append(_summary(s))
     return runs
+
+
+def _event_views(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The detail fields derived from a run's event records: agents, events, tools, timeline."""
+    events = [e for e in records if e.get("source") == "sf"][-EVENT_TAIL:]
+    # Historical runs may contain both Pi and normalized events. Prefer normalized per invocation.
+    normalized = {(e.get("stage"), e.get("agent"), e.get("invocation"))
+                  for e in records if e.get("source") == "agent"}
+    visible = [e for e in records if e.get("source") != "pi"
+               or (e.get("stage"), e.get("agent"), e.get("invocation")) not in normalized]
+    tools = [e for e in visible if (e.get("event") or {}).get("type") == "tool_execution_start"][-EVENT_TAIL:]
+    timeline = [p for p in (_timeline_point(json.dumps(e)) for e in visible) if p]
+    return {"agents": _agent_models(records), "events": events, "tools": tools, "timeline": timeline}
+
+
+def _documents(target: Any) -> tuple[list[str], str | None]:
+    try:
+        return discover_documentation(Path(target)), None
+    except (g.GitError, OSError, ValueError, KeyError, TypeError) as e:
+        return [], f"Could not load project documents: {e}"
 
 
 def run_detail(runs_dir: Path, run_id: str) -> dict[str, Any] | None:
@@ -78,30 +113,15 @@ def run_detail(runs_dir: Path, run_id: str) -> dict[str, Any] | None:
     events_path = run_dir / "events.jsonl"
     lines = events_path.read_text().splitlines() if events_path.exists() else []
     records = [json.loads(line) for line in lines]
-    events = [e for e in records if e.get("source") == "sf"][-EVENT_TAIL:]
-    # Historical runs may contain both Pi and normalized events. Prefer normalized per invocation.
-    normalized = {(e.get("stage"), e.get("agent"), e.get("invocation"))
-                  for e in records if e.get("source") == "agent"}
-    visible = [e for e in records if e.get("source") != "pi"
-               or (e.get("stage"), e.get("agent"), e.get("invocation")) not in normalized]
-    tools = [e for e in visible if (e.get("event") or {}).get("type") == "tool_execution_start"][-EVENT_TAIL:]
-    timeline = [p for p in (_timeline_point(json.dumps(e)) for e in visible) if p]
     artefacts = sorted(p.name for p in run_dir.iterdir() if p.is_file() and p.name.startswith(ARTEFACT_PREFIXES))
     updated = events_path.stat().st_mtime if events_path.exists() else None
-    documents, documents_error = [], None
-    try:
-        documents = discover_documentation(Path(state["target"]))
-    except (g.GitError, OSError, ValueError, KeyError, TypeError) as e:
-        documents_error = f"Could not load project documents: {e}"
+    documents, documents_error = _documents(state.get("target"))
     return {
         "documents": documents,
         "documents_error": documents_error,
         "state": state,
-        "agents": _agent_models(records),
-        "events": events,
-        "tools": tools,
+        **_event_views(records),
         "artefacts": artefacts,
-        "timeline": timeline,
         "events_updated": updated,
     }
 
@@ -192,16 +212,148 @@ def _run_dir(runs_dir: Path, run_id: str) -> Path | None:
     return run_dir
 
 
-def _project_document(runs_dir: Path, run_id: str, name: str) -> Path:
+def _project_document(runs: Any, run_id: str, name: str) -> Path:
     """Resolve only existing Markdown in this run's target inventory, never arbitrary paths."""
-    run_dir = _run_dir(runs_dir, run_id)
-    if run_dir is None:
+    target = runs.target(run_id)
+    if target is None:
         raise FileNotFoundError("Run not found")
-    state = json.loads((run_dir / "run-state.json").read_text())
-    target = Path(state["target"])
     if name not in discover_documentation(target):
         raise FileNotFoundError("Project document not found")
     return target / name
+
+
+class FileRuns:
+    """Runs and improvement records from `runs/*/` and `improvements.jsonl` (no SF_DATABASE_URL)."""
+
+    queued = False
+
+    def __init__(self, runs_dir: Path, factory: Path):
+        self.runs_dir, self.factory = runs_dir, factory
+
+    def list_runs(self) -> list[dict[str, Any]]:
+        return list_runs(self.runs_dir)
+
+    def run_detail(self, run_id: str) -> dict[str, Any] | None:
+        return run_detail(self.runs_dir, run_id)
+
+    def artefact(self, run_id: str, name: str) -> str | None:
+        return artefact(self.runs_dir, run_id, name)
+
+    def delete_run(self, run_id: str) -> bool:
+        return delete_run(self.runs_dir, run_id)
+
+    def target(self, run_id: str) -> Path | None:
+        run_dir = _run_dir(self.runs_dir, run_id)
+        return None if run_dir is None else Path(json.loads((run_dir / "run-state.json").read_text())["target"])
+
+    def improvements(self) -> list[dict[str, Any]]:
+        return load_decisions(self.factory)
+
+    def delete_improvement(self, identity: tuple[str, str, str]) -> bool:
+        return delete_decision(self.factory, *identity)
+
+    def apply_improvement(self, identity: tuple[str, str, str]) -> str:
+        return start_application(self.factory, identity)
+
+
+class DbRuns:
+    """Runs, jobs, runners and improvement records from the Postgres store (SF_DATABASE_URL set).
+
+    One connection per call: the server is threaded and a psycopg connection is not shared across threads.
+    Artifacts are linked with presigned artifact-store URLs; run documents are served from the store.
+    """
+
+    queued = True
+
+    def __init__(self, db_url: str, factory: Path):
+        self.db_url, self.factory = db_url, factory
+
+    def _conn(self) -> Any:
+        return store.connect(self.db_url)
+
+    def list_runs(self) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            return [_summary(r["state"]) for r in conn.execute("SELECT state FROM runs ORDER BY created_at DESC, id DESC")]
+
+    def run_detail(self, run_id: str) -> dict[str, Any] | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT state FROM runs WHERE id = %s", (run_id,)).fetchone()
+            if row is None:
+                return None
+            records = store.events(conn, run_id)
+            names = sorted(store.documents(conn, run_id))
+            jobs = conn.execute(
+                "SELECT j.id, j.stage, j.attempt, j.status, j.claimed_by, j.infra_retries, j.created_at,"
+                " r.outcome, r.branch_sha, r.artifact_prefix FROM stage_jobs j"
+                " LEFT JOIN stage_results r ON r.job_id = j.id WHERE j.run_id = %s ORDER BY j.id",
+                (run_id,),
+            ).fetchall()
+        artifacts_list, artifacts_error = [], None
+        try:
+            for job in jobs:
+                if prefix := job["artifact_prefix"]:
+                    artifacts_list += [{"job_id": job["id"], "stage": job["stage"], "name": key[len(prefix):],
+                                        "key": key, "url": artifacts.presigned_url(key)}
+                                       for key in artifacts.list_keys(prefix)]
+        except g.InfraError as e:
+            artifacts_error = str(e)
+        state = row["state"]
+        documents, documents_error = _documents(state.get("target"))
+        updated = datetime.fromisoformat(records[-1]["ts"]).timestamp() if records else None
+        return {
+            "documents": documents,
+            "documents_error": documents_error,
+            "state": state,
+            **_event_views(records),
+            "artefacts": [n for n in names if n.startswith(ARTEFACT_PREFIXES)],
+            "artifacts": artifacts_list,
+            "artifacts_error": artifacts_error,
+            "jobs": [{k: (str(v) if k == "created_at" else v) for k, v in job.items()} for job in jobs],
+            "can_resume": state.get("status") == "parked" and not state.get("cap_reached"),
+            "events_updated": updated,
+        }
+
+    def artefact(self, run_id: str, name: str) -> str | None:
+        if "/" in name or not name.startswith(ARTEFACT_PREFIXES):
+            return None
+        with self._conn() as conn:
+            try:
+                return store.get_document(conn, run_id, name)
+            except LookupError:
+                return None
+
+    def delete_run(self, run_id: str) -> bool:
+        with self._conn() as conn:
+            return conn.execute("DELETE FROM runs WHERE id = %s", (run_id,)).rowcount == 1
+
+    def target(self, run_id: str) -> Path | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT target FROM runs WHERE id = %s", (run_id,)).fetchone()
+        return None if row is None else Path(row["target"])
+
+    def resume(self, run_id: str) -> dict[str, Any] | None:
+        """`workflow.resume_queued`; None for an unknown run, ValueError when the run cannot resume."""
+        with self._conn() as conn:
+            if conn.execute("SELECT 1 FROM runs WHERE id = %s", (run_id,)).fetchone() is None:
+                return None
+            return resume_queued(conn, run_id)
+
+    def runners(self) -> dict[str, Any]:
+        with self._conn() as conn:
+            runners = [r | {"last_heartbeat": str(r["last_heartbeat"]) if r["last_heartbeat"] else None}
+                       for r in queue.list_runners(conn)]
+            return {"runners": runners, "queued": queue.queue_depth(conn)}
+
+    def improvements(self) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            return store.improvements(conn)
+
+    def delete_improvement(self, identity: tuple[str, str, str]) -> bool:
+        with self._conn() as conn:
+            return store.delete_improvement(conn, identity)
+
+    def apply_improvement(self, identity: tuple[str, str, str]) -> str:
+        return start_queued_application(self.db_url, self.factory, identity)
 
 
 def agent_config(agents_dir: Path) -> dict[str, Any]:
@@ -274,7 +426,7 @@ def set_agent_config(agents_dir: Path, name: str, model: str, thinking: str,
     return None
 
 
-def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandler]:
+def make_handler(runs: FileRuns | DbRuns, agents_dir: Path) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parts = [p for p in self.path.split("?")[0].split("/") if p]
@@ -286,8 +438,8 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 return self._json(agent_config(agents_dir))
             if parts == ["api", "improvements"]:
                 try:
-                    return self._json(list(reversed(load_decisions(agents_dir.parent))))
-                except (OSError, ValueError) as e:
+                    return self._json(list(reversed(runs.improvements())))
+                except (OSError, ValueError, psycopg.Error) as e:
                     return self._send(json.dumps({"error": f"Cannot read improvement log: {e}"}).encode(),
                                       "application/json", HTTPStatus.INTERNAL_SERVER_ERROR)
             if len(parts) == 4 and parts[:2] == ["api", "config"] and parts[3] in ("file", "user-file"):
@@ -302,20 +454,22 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                         result["placeholders"] = list(TASK_VARIABLES[parts[2]])
                     return self._json(result)
                 return self.send_error(HTTPStatus.NOT_FOUND)
+            if parts == ["api", "runners"]:  # file mode has no runners: null tells the page to hide the panel
+                return self._json(runs.runners() if runs.queued else {"runners": None, "queued": None})
             if parts == ["api", "runs"]:
-                return self._json(list_runs(runs_dir))
+                return self._json(runs.list_runs())
             if len(parts) == 3 and parts[:2] == ["api", "runs"]:
-                return self._json(run_detail(runs_dir, parts[2]))
+                return self._json(runs.run_detail(parts[2]))
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "document":
                 try:
                     name = parse_qs(urlsplit(self.path).query).get("path", [""])[0]
-                    path = _project_document(runs_dir, parts[2], name)
+                    path = _project_document(runs, parts[2], name)
                     return self._json({"content": path.read_text(),
                                        "deletable": not path.resolve().is_relative_to(agents_dir.resolve())})
                 except (g.GitError, OSError, ValueError, KeyError, TypeError) as e:
                     return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.NOT_FOUND)
             if len(parts) == 4 and parts[:2] == ["api", "runs"]:
-                text = artefact(runs_dir, parts[2], parts[3])
+                text = runs.artefact(parts[2], parts[3])
                 if text is not None:
                     return self._send(text.encode(), "text/plain; charset=utf-8")
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -326,6 +480,8 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 return self._apply_improvement()
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "retro":
                 return self._start_retro(parts[2])
+            if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "resume" and runs.queued:
+                return self._resume(parts[2])
             self.send_error(HTTPStatus.NOT_FOUND)
 
         def do_DELETE(self) -> None:
@@ -336,7 +492,7 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 return self._delete_project_document(parts[2])
             if len(parts) == 3 and parts[:2] == ["api", "runs"]:
                 try:
-                    if delete_run(runs_dir, parts[2]):
+                    if runs.delete_run(parts[2]):
                         return self._send(b"{}", "application/json")
                 except ApplyRefused as e:
                     return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.CONFLICT)
@@ -365,8 +521,20 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                 HTTPStatus.BAD_REQUEST if error else HTTPStatus.OK,
             )
 
+        def _resume(self, run_id: str) -> None:
+            try:
+                job = runs.resume(run_id)
+            except ValueError as e:
+                return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.CONFLICT)
+            if job is None:
+                return self._send(json.dumps({"error": "Run not found"}).encode(), "application/json",
+                                  HTTPStatus.NOT_FOUND)
+            self._json({"error": None, "job": job})
+
         def _start_retro(self, run_id: str) -> None:
             try:
+                if runs.queued:
+                    raise RetroRefused("retro is not available for queued runs in v1")
                 start_retro(agents_dir.parent, run_id)
             except FileNotFoundError as e:
                 status, error = HTTPStatus.NOT_FOUND, str(e)
@@ -387,12 +555,12 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
             except (ValueError, TypeError) as e:
                 return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.BAD_REQUEST)
             try:
-                run_id = start_application(agents_dir.parent, (body["ts"], body["run_id"], body["title"]))
+                run_id = runs.apply_improvement((body["ts"], body["run_id"], body["title"]))
             except FileNotFoundError as e:
                 status, error = HTTPStatus.NOT_FOUND, str(e)
             except ApplyRefused as e:
                 status, error = HTTPStatus.CONFLICT, str(e)
-            except (OSError, ValueError, TypeError, RuntimeError, g.GitError) as e:
+            except (OSError, ValueError, TypeError, RuntimeError, g.GitError, psycopg.Error) as e:
                 status, error = HTTPStatus.INTERNAL_SERVER_ERROR, str(e)
             else:
                 return self._send(json.dumps({"error": None, "run_id": run_id}).encode(),
@@ -407,10 +575,10 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                                                      for k in ("ts", "run_id", "title")):
                     raise ValueError("ts, run_id and title must be strings")
                 status = HTTPStatus.INTERNAL_SERVER_ERROR
-                deleted = delete_decision(agents_dir.parent, body["ts"], body["run_id"], body["title"])
+                deleted = runs.delete_improvement((body["ts"], body["run_id"], body["title"]))
             except RuntimeError as e:
                 return self._send(json.dumps({"error": str(e)}).encode(), "application/json", HTTPStatus.CONFLICT)
-            except (OSError, ValueError) as e:  # unreadable log, or a body that is not a JSON object
+            except (OSError, ValueError, psycopg.Error) as e:  # unreadable log, or a body that is not a JSON object
                 return self._send(json.dumps({"error": str(e)}).encode(), "application/json", status)
             if not deleted:
                 return self._send(json.dumps({"error": "That improvement is no longer in the log."}).encode(),
@@ -425,7 +593,7 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                     raise TypeError("original must be a string")
                 status = HTTPStatus.NOT_FOUND
                 name = parse_qs(urlsplit(self.path).query).get("path", [""])[0]
-                path = _project_document(runs_dir, run_id, name)
+                path = _project_document(runs, run_id, name)
                 status = HTTPStatus.FORBIDDEN
                 if path.resolve().is_relative_to(agents_dir.resolve()):
                     raise ValueError("Agent configuration files cannot be deleted")
@@ -447,7 +615,7 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
                     raise ValueError("content and original must be strings")
                 status = HTTPStatus.NOT_FOUND
                 name = parse_qs(urlsplit(self.path).query).get("path", [""])[0]
-                path = _project_document(runs_dir, run_id, name)
+                path = _project_document(runs, run_id, name)
                 status = HTTPStatus.CONFLICT
                 if path.read_text() != body["original"]:
                     raise ValueError("File changed since opening. Reopen it before saving.")
@@ -507,9 +675,25 @@ def make_handler(runs_dir: Path, agents_dir: Path) -> type[BaseHTTPRequestHandle
     return Handler
 
 
-def serve(runs_dir: Path, host: str, port: int, agents_dir: Path | None = None) -> ThreadingHTTPServer:
-    try:
-        recover_applications((agents_dir or runs_dir.parent / "agents").parent)
-    except (OSError, ValueError, KeyError, TypeError):
-        logging.getLogger(__name__).exception("Could not recover interrupted improvement executions")
-    return ThreadingHTTPServer((host, port), make_handler(runs_dir, agents_dir or runs_dir.parent / "agents"))
+def serve(runs_dir: Path, host: str, port: int, agents_dir: Path | None = None,
+          db_url: str | None = None) -> ThreadingHTTPServer:
+    """Serve the dashboard over `runs_dir` files, or over the Postgres store when `db_url` (or SF_DATABASE_URL) is set."""
+    agents_dir = agents_dir or runs_dir.parent / "agents"
+    factory = agents_dir.parent
+    db_url = db_url or os.environ.get("SF_DATABASE_URL")
+    runs: FileRuns | DbRuns
+    if db_url:
+        runs = DbRuns(db_url, factory)
+        with store.connect(db_url) as conn:
+            store.migrate(conn)
+            try:
+                recover_queued_applications(conn)
+            except (psycopg.Error, KeyError, TypeError):
+                logging.getLogger(__name__).exception("Could not recover interrupted improvement executions")
+    else:
+        runs = FileRuns(runs_dir, factory)
+        try:
+            recover_applications(factory)
+        except (OSError, ValueError, KeyError, TypeError):
+            logging.getLogger(__name__).exception("Could not recover interrupted improvement executions")
+    return ThreadingHTTPServer((host, port), make_handler(runs, agents_dir))

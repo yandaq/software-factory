@@ -1,4 +1,4 @@
-"""Run directory: persistent state (`run-state.json`), event stream (`events.jsonl`), lockfile."""
+"""Run state and event stream, persisted to `runs/<id>/` files or, given a connection, to the Postgres store."""
 
 import json
 import os
@@ -70,11 +70,14 @@ class RunState(BaseModel):
     trunk: str
     branch: str
     approve_plan: bool = False
-    status: Literal["running", "done", "failed", "aborted"] = "running"
+    # `parked`: a queued run stopped on an agent failure or loop cap; resumable, visible in the dashboard.
+    status: Literal["running", "done", "failed", "aborted", "parked"] = "running"
     stage: str = "branch"
     loop: int = 0
     max_loops: int = 5
     cap_reached: bool = False
+    merge_conflicts: int = 0
+    pending: dict[str, Any] | None = None  # the next step `{stage, inputs}` the local driver resumes from
     completed: list[str] = Field(default_factory=list)
     results: dict[str, str] = Field(default_factory=dict)
     invocations: list[Invocation] = Field(default_factory=list)
@@ -96,22 +99,33 @@ class RunState(BaseModel):
 
 
 class Run:
-    """Owns `runs/<id>/`: state persistence and the tagged event stream."""
+    """Owns `runs/<id>/` and the run's state persistence and tagged event stream.
 
-    def __init__(self, factory: Path, state: RunState):
+    With `db` (a `sf.store.connect()` connection) state and events go to Postgres instead of
+    `run-state.json` / `events.jsonl`; the run must already exist there (`store.create_run`).
+    `run_dir` replaces `runs/<id>/` as the home of harness outputs (a queued job's temp dir).
+    """
+
+    def __init__(self, factory: Path, state: RunState, db: Any = None, run_dir: Path | None = None):
         self.factory = factory
         self.state = state
-        self.dir = factory / "runs" / state.run_id
+        self.db = db
+        self.dir = run_dir or factory / "runs" / state.run_id  # queued jobs pass a per-job temp dir
         (self.dir / "sessions").mkdir(parents=True, exist_ok=True)
         self._invocation_counts: dict[str, int] = defaultdict(int)
 
     @classmethod
-    def load(cls, factory: Path, run_id: str) -> Run:
-        path = factory / "runs" / run_id / "run-state.json"
-        if not path.exists():
-            raise FileNotFoundError(f"no run-state.json for run {run_id} at {path}")
-        state = RunState.model_validate_json(path.read_text())
-        run = cls(factory, state)
+    def load(cls, factory: Path, run_id: str, db: Any = None) -> Run:
+        if db is not None:
+            from sf import store
+
+            state = store.load_state(db, run_id)
+        else:
+            path = factory / "runs" / run_id / "run-state.json"
+            if not path.exists():
+                raise FileNotFoundError(f"no run-state.json for run {run_id} at {path}")
+            state = RunState.model_validate_json(path.read_text())
+        run = cls(factory, state, db)
         for inv in state.invocations:
             run._invocation_counts[inv.stage] = max(run._invocation_counts[inv.stage], inv.n)
         return run
@@ -121,6 +135,11 @@ class Run:
         return Path(self.state.target)
 
     def save(self) -> None:
+        if self.db is not None:
+            from sf import store
+
+            store.save_state(self.db, self.state)
+            return
         data = self.state.model_dump()
         data["tokens"] = self.state.totals()
         (self.dir / "run-state.json").write_text(json.dumps(data, indent=2) + "\n")
@@ -134,6 +153,11 @@ class Run:
             "source": source,
             **event,
         }
+        if self.db is not None:
+            from sf import store
+
+            store.append_event(self.db, record)
+            return
         with (self.dir / "events.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
 

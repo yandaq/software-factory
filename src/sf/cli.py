@@ -1,5 +1,10 @@
 """`sf` command line."""
 
+import os
+import signal
+import socket
+import sys
+import threading
 import time
 from collections.abc import Callable
 from functools import partial
@@ -9,13 +14,13 @@ from typing import Annotated
 import typer
 
 from sf import git as g
-from sf import mailbox
+from sf import mailbox, store, worker
 from sf.console import LiveDisplay, TerminalHuman
 from sf.git import GitError
 from sf.run import Run, RunLock
 from sf.runner import StageFailed
 from sf.target import TrunkError, load_config, resolve_trunk
-from sf.workflow import Aborted, Workflow, new_run
+from sf.workflow import Aborted, Workflow, new_run, resume_queued, submit_run
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -150,14 +155,87 @@ def _watch_prompt(factory: Path, target: Path, box: mailbox.Mailbox, path: Path,
 
 
 @app.command()
+def submit(
+    target: Annotated[Path, typer.Argument(help="Target repository", exists=True, file_okay=False)],
+    prompt_file: Annotated[str, typer.Argument(help="Prompt Markdown file, or - for stdin")] = "-",
+    approve_plan: Annotated[bool, typer.Option(help="Not supported for queued runs in v1")] = False,
+) -> None:
+    """Queue a new run against TARGET for `sf runner`s to execute (needs SF_DATABASE_URL)."""
+    if approve_plan:
+        raise typer.BadParameter("--approve-plan is not supported for queued runs in v1; use `sf run`")
+    if not os.environ.get("SF_DATABASE_URL"):
+        typer.echo("error: SF_DATABASE_URL is not set; it must name the factory's Postgres database", err=True)
+        raise typer.Exit(1)
+    factory = _factory()
+    target = _check_target(target)
+    text = sys.stdin.read() if prompt_file == "-" else Path(prompt_file).read_text()
+    if not text.strip():
+        raise typer.BadParameter("the prompt is empty")
+    conn = store.connect()
+    try:
+        store.migrate(conn)
+        state = submit_run(conn, factory, target, text)
+    finally:
+        conn.close()
+    typer.echo(state.run_id)
+
+
+@app.command()
+def runner(
+    caps: Annotated[list[str] | None, typer.Option("--caps", help="Extra capability tag (repeatable)")] = None,
+    concurrency: Annotated[int, typer.Option(min=1, help="Jobs run at once")] = 1,
+    runner_id: Annotated[str | None, typer.Option("--id", help="Runner id (default: <host>-<pid>)")] = None,
+) -> None:
+    """Claim and run queued stage jobs until SIGINT/SIGTERM (needs SF_DATABASE_URL and SF_S3_*)."""
+    if missing := worker.missing_env():
+        typer.echo(f"error: sf runner needs {', '.join(missing)} set", err=True)
+        raise typer.Exit(1)
+    factory = _factory()
+    host = socket.gethostname()
+    all_caps = sorted(set(worker.detect_caps()) | set(caps or []))
+    stop = threading.Event()
+
+    def on_signal(signum: int, frame: object) -> None:
+        if stop.is_set():
+            worker.json_log(event="runner_killed", signal=signum)
+            raise SystemExit(130)  # workers are daemon threads; their leases expire and are reaped
+        worker.json_log(event="runner_stopping", signal=signum)
+        stop.set()
+
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    worker.serve(factory, runner_id or f"{host}-{os.getpid()}", host, all_caps, concurrency, stop)
+
+
+@app.command()
 def resume(run_id: str) -> None:
-    """Continue a run from its next incomplete stage."""
+    """Continue a run from its next incomplete stage (a parked queued run is re-enqueued)."""
+    if os.environ.get("SF_DATABASE_URL") and _resume_queued(run_id):
+        return
     factory = _factory()
     with RunLock(factory):
         r = Run.load(factory, run_id)
         if r.state.kind == "improvement":
             raise typer.BadParameter("Retry improvement executions from the dashboard config page.")
         _execute(r)
+
+
+def _resume_queued(run_id: str) -> bool:
+    """Re-enqueue `run_id` if the store has it; False if it is not a queued run."""
+    conn = store.connect()
+    try:
+        store.migrate(conn)
+        if conn.execute("SELECT 1 FROM runs WHERE id = %s", (run_id,)).fetchone() is None:
+            return False
+        try:
+            job = resume_queued(conn, run_id)
+        except ValueError as e:
+            typer.echo(f"error: {e}", err=True)
+            raise typer.Exit(1) from e
+    finally:
+        conn.close()
+    typer.echo(f"run {run_id} resumed: queued {job['stage']} (job {job['id']})")
+    return True
 
 
 @app.command()
