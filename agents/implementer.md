@@ -2,7 +2,7 @@
 name: implementer
 purpose: Deliver the planned work
 model: openai/gpt-6.1-sol
-thinking: medium
+thinking: low
 tools: [read, bash, edit, write, grep, find, ls]
 contract:
   type: object

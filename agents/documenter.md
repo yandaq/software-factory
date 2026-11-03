@@ -1,7 +1,7 @@
 ---
 name: documenter
 purpose: Reduce drift between implemented code and documentation
-model: openai/gpt-5.6-terra
+model: openai/gpt-6.1-sol
 thinking: low
 tools: [read, bash, edit, write, grep, find, ls]
 contract:

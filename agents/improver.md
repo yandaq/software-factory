@@ -2,7 +2,7 @@
 name: improver
 purpose: Propose improvements to agent prompts, Python runner and target documentation from run evidence
 model: openai/gpt-6.1-sol
-thinking: high
+thinking: medium
 tools: [read, grep, find, ls]
 contract:
   type: object
