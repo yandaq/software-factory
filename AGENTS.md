@@ -5,7 +5,7 @@ Behavioural and engineering guidelines to reduce common LLM coding mistakes. Mer
 **Trade-off:** These guidelines favour caution, clarity and verifiable progress over speed. Use judgement for trivial tasks.
 
 > `AGENTS.md` defines **how agents engineer changes**.  
-> `VALIDATION.md` defines **how agents prove those changes are correct**.
+> `docs/VALIDATION.md` defines **how agents prove those changes are correct**.
 
 ## 1. Think Before Coding
 
@@ -63,7 +63,7 @@ Every changed line should trace directly to the request or to work required to k
 - For multi-step work, create a brief `PLAN.md` and work one step at a time unless explicitly instructed otherwise.
 - Keep each plan step independently understandable and small enough to reason about.
 - Keep `PLAN.md` scoped to the current task; on completion delete it or archive its durable parts, and never accumulate finished work in it.
-- Do not treat implementation activity as evidence of success; completion is governed by `VALIDATION.md`.
+- Do not treat implementation activity as evidence of success; completion is governed by `docs/VALIDATION.md`.
 
 For multi-step work, a plan may use this shape:
 
@@ -162,9 +162,9 @@ Ask: "Am I extending the system that is already here, or accidentally creating a
 
 ## 10. Validate Before Completion
 
-**A change is not complete until the applicable validation defined in `VALIDATION.md` has passed.**
+**A change is not complete until the applicable validation defined in `docs/VALIDATION.md` has passed.**
 
-- Read and follow `VALIDATION.md` for the validation process, evidence requirements and feedback loop.
+- Read and follow `docs/VALIDATION.md` for the validation process, evidence requirements and feedback loop.
 - Select validation checks according to the change, repository and risk; do not assume every check applies to every task.
 - Do not declare success based on code inspection or plausibility alone.
 - Do not weaken tests, suppress errors or bypass checks merely to make validation pass.
@@ -173,4 +173,4 @@ Ask: "Am I extending the system that is already here, or accidentally creating a
 
 ---
 
-**These guidelines are working when:** diffs remain focused, designs stay simple, repository conventions are respected, systems are observable, architectural boundaries remain clear, unrelated behaviour is preserved, and completion claims are backed by the evidence required in `VALIDATION.md`.
+**These guidelines are working when:** diffs remain focused, designs stay simple, repository conventions are respected, systems are observable, architectural boundaries remain clear, unrelated behaviour is preserved, and completion claims are backed by the evidence required in `docs/VALIDATION.md`.
